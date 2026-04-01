@@ -1,0 +1,276 @@
+# =============================================================================
+# ONVOX/TONES Configuration
+# =============================================================================
+# Single source of truth for all paths, parameters, and participant configs.
+# All paths are relative to the project root (base_dir).
+
+# Base directory — override with TONES_BASE_DIR environment variable
+base_dir: null  # Auto-detected as the directory containing this config file
+
+# -----------------------------------------------------------------------------
+# Data Matching
+# -----------------------------------------------------------------------------
+matching:
+  window_minutes: 30         # Max time difference between audio and CGM reading
+  use_interpolation: true    # Linear interpolation between bracketing CGM readings
+  min_audio_duration_sec: 0.5  # Skip audio files shorter than this
+
+# -----------------------------------------------------------------------------
+# Feature Extraction
+# -----------------------------------------------------------------------------
+features:
+  sample_rate: 16000
+  # MFCC settings (based on hyperparameter optimization results)
+  n_mfcc: 20
+  n_mels: 64
+  fmin: 50
+  fmax: 8000
+  # Mel/MFCC path uses librosa Slaney scaling; MFCCExtractor passes htk=False (non-HTK mel).
+  use_deltas: true
+  use_delta_deltas: true
+  # Windowed extraction
+  window_ms: 1000
+  hop_ratio: 0.5
+  # Feature caching
+  cache_dir: ".cache/features"
+  use_cache: true
+
+  # Within-speaker normalization (Phase 1A)
+  # Options: "zscore", "running_zscore", "rank", "none"
+  normalization: "zscore"
+  normalization_window: 20      # Window size for running_zscore
+  normalization_min_history: 5  # Minimum history for running_zscore
+
+  # Voice quality features (Phase 1B)
+  use_voice_quality: true      # Jitter, shimmer, tremor, formants, HNR, CPP. Zero-vector fallback on pYIN failure.
+
+  # Temporal context features (Phase 1C)
+  use_temporal: true            # Add circadian + delta + time-since features
+  temporal_max_gap_hours: 4.0   # Max gap for delta computation
+  use_rolling_stats: false      # Rolling mean/std (increases feature dim significantly)
+
+# -----------------------------------------------------------------------------
+# Models
+# -----------------------------------------------------------------------------
+models:
+  # Personalized model settings
+  personalized:
+    primary_model: SVR        # Best for personalized (from hyperparameter analysis)
+    cv_strategy: loo          # Leave-One-Out for small datasets
+    cv_kfold_splits: 10       # Used when n_samples > 50
+    min_samples: 20           # Minimum samples to train a personalized model
+  # Population model settings
+  population:
+    primary_model: BayesianRidge  # Best for population/cold-start
+    cv_strategy: lopo             # Leave-One-Person-Out
+  # Model hyperparameters
+  svr:
+    kernel: rbf
+    C: 10
+    gamma: scale
+  bayesian_ridge: {}  # Uses sklearn defaults
+  random_forest:
+    n_estimators: 100
+    max_depth: 10
+    random_state: 42
+  gradient_boosting:
+    n_estimators: 100
+    max_depth: 5
+    random_state: 42
+  knn:
+    n_neighbors: 5
+    weights: distance
+
+  # Novel strategies (Phase 2+3)
+  strategies:
+    # Phase 2A: Deviation-from-personal-mean regression
+    use_deviation_target: true
+
+    # Phase 2B: Rate-of-change classification
+    use_rate_classification: true
+    rate_threshold: 1.0         # mg/dL/min threshold for rising/falling
+
+    # Phase 2C: Regime classification
+    use_regime_classification: true
+
+    # Phase 3A: Hierarchical Bayesian model
+    use_hierarchical_bayesian: true
+    bayesian_backend: "empirical"  # "pymc" or "empirical" (fallback)
+
+    # Phase 3B: Few-shot calibration evaluation
+    use_few_shot_calibration: true
+    calibration_samples: 10
+    calibration_strategy: "linear"  # "bias", "linear", "feature_based"
+
+    # Phase 3C: Diverse ensemble
+    use_ensemble: true
+
+    # Temporal validation (Phase 0A)
+    use_temporal_validation: true
+    temporal_train_fraction: 0.7
+
+# -----------------------------------------------------------------------------
+# Output
+# -----------------------------------------------------------------------------
+output:
+  dir: "output"
+  save_models: true
+  save_visualizations: true
+  report_format: html
+
+# -----------------------------------------------------------------------------
+# Participants
+# -----------------------------------------------------------------------------
+# Each participant entry contains:
+#   glucose_csv:    list of CSV file paths (relative to base_dir)
+#   audio_dirs:     list of directories containing audio files
+#   audio_ext:      list of audio file extensions to look for
+#   glucose_unit:   "mg/dL" or "mmol/L"
+#   optimal_offset: time offset in minutes for glucose matching (0 = no offset)
+#   notes:          optional notes
+#
+# Key file mapping (key glucose person freestyle libre 2023 Antler.txt):
+#   Number 2 = Steffen Haeseli, Number 5 = Boriska Molnar, Number 7 = Lara Planet
+#   Number 8 = Christian Legler, Number 9 = Margo (Margarita), Number 10 = Viktoria (Vicky)
+#   Number 12 = Bopo del Valle (R_Rodolfo), Number 14 = Berna Agar
+
+participants:
+  Wolf:
+    glucose_csv:
+      - "Wolf/all glucose/HenningGebhard_glucose_19-11-2023.csv"
+    audio_dirs:
+      - "Wolf/all wav audio"
+      - "Wolf/all opus audio"
+    audio_ext: [".wav", ".opus", ".waptt"]
+    glucose_unit: "mg/dL"
+    optimal_offset: 30
+    notes: "Glucose from CGM CSV (Henning...). Filenames have glucose prefix - ignore, match by timestamp."
+
+  Sybille:
+    glucose_csv:
+      - "Sybille/glucose/SSchütt_glucose_19-11-2023.csv"
+    audio_dirs:
+      - "Sybille/audio_wav"
+      - "Sybille/audio"
+      - "Sybille"
+    audio_ext: [".wav", ".opus", ".waptt"]
+    glucose_unit: "mg/dL"
+    optimal_offset: 15
+    notes: "German-language CSV (Glukosewert mg/dL)."
+
+  Anja:
+    glucose_csv:
+      - "Anja/glucose 21nov 2023/AnjaZhao_glucose_6-11-2023.csv"
+      - "Anja/glucose 21nov 2023/AnjaZhao_glucose_10-11-2023.csv"
+      - "Anja/glucose 21nov 2023/AnjaZhao_glucose_13-11-2023.csv"
+      - "Anja/glucose 21nov 2023/AnjaZhao_glucose_16-11-2023.csv"
+    audio_dirs:
+      - "Anja/conv_audio"
+      - "Anja/converted audio"
+      - "Anja/audio 21nov 2023"
+      - "Anja"
+    audio_ext: [".wav", ".opus", ".waptt"]
+    glucose_unit: "mg/dL"
+    optimal_offset: 0
+
+  Margarita:
+    glucose_csv:
+      - "Margarita/Number_9Nov_29_glucose_4-1-2024.csv"
+    audio_dirs:
+      - "Margarita/conv_audio"
+      - "Margarita"
+    audio_ext: [".wav", ".opus", ".waptt"]
+    glucose_unit: "mmol/L"
+    optimal_offset: 20
+    notes: "Margo Grobovskaya = Margarita (Number 9 from key)."
+
+  Vicky:
+    glucose_csv:
+      - "Vicky/Number_10Nov_29_glucose_4-1-2024.csv"
+    audio_dirs:
+      - "Vicky/conv_audio"
+      - "Vicky"
+    audio_ext: [".wav", ".opus", ".waptt"]
+    glucose_unit: "mmol/L"
+    optimal_offset: 15
+    notes: "Viktoria Pilinko = Vicky (Number 10 from key)."
+
+  Steffen:
+    glucose_csv:
+      - "Steffen_Haeseli/Number_2Nov_23_glucose_4-1-2024.csv"
+    audio_dirs:
+      - "Steffen_Haeseli/wav"
+      - "Steffen_Haeseli"
+    audio_ext: [".wav", ".opus", ".waptt"]
+    glucose_unit: "mmol/L"
+    optimal_offset: 15
+
+  Lara:
+    glucose_csv:
+      - "Lara/Number_7Nov_27_glucose_4-1-2024.csv"
+    audio_dirs:
+      - "Lara/conv_audio"
+      - "Lara"
+    audio_ext: [".wav", ".opus", ".waptt"]
+    glucose_unit: "mmol/L"
+    optimal_offset: 15
+    notes: "Lara Planet = Number 7 from key."
+
+  Darav:
+    glucose_csv:
+      - "Darav/Nov21_finished/DaravTaha_glucose_5-11-2023 (2).csv"
+      - "Darav/Nov21_finished/DaravTaha_glucose_6-11-2023.csv"
+      - "Darav/Nov21_finished/DaravTaha_glucose_7-11-2023.csv"
+      - "Darav/Nov21_finished/DaravTaha_glucose_11-11-2023.csv"
+      - "Darav/Nov21_finished/DaravTaha_glucose_15-11-2023.csv"
+      - "Darav/Nov21_finished/DaravTaha_glucose_19-11-2023.csv"
+    audio_dirs:
+      - "Darav/wav_audio"
+      - "Darav/Nov21_finished"
+      - "Darav"
+    audio_ext: [".wav", ".opus", ".waptt"]
+    glucose_unit: "mg/dL"
+    optimal_offset: 0
+
+  Joao:
+    glucose_csv:
+      - "Joao/Nov21/JoãoMira_glucose_7-11-2023.csv"
+      - "Joao/Nov21/JoãoMira_glucose_19-11-2023.csv"
+    audio_dirs:
+      - "Joao/wav_audio"
+      - "Joao/Nov21"
+      - "Joao"
+    audio_ext: [".wav", ".opus", ".waptt"]
+    glucose_unit: "mg/dL"
+    optimal_offset: 0
+
+  Alvar:
+    glucose_csv:
+      - "Alvar/AlvarMollik_glucose_5-12-2023.csv"
+    audio_dirs:
+      - "Alvar/wav_audio"
+      - "Alvar"
+    audio_ext: [".wav", ".waptt"]
+    glucose_unit: "mg/dL"
+    optimal_offset: 0
+
+  R_Rodolfo:
+    glucose_csv:
+      - "Number_12Nov_29_glucose_4-1-2024.csv"
+    audio_dirs:
+      - "R_Rodolfo/conv_audio"
+      - "R_Rodolfo"
+    audio_ext: [".wav", ".opus", ".waptt"]
+    glucose_unit: "mmol/L"
+    optimal_offset: 0
+    notes: "Number 12 = Bopo del Valle = R_Rodolfo (from key)."
+
+  Christian_L:
+    glucose_csv:
+      - "Christian_L/Number_8Nov_27_glucose_4-1-2024.csv"
+    audio_dirs:
+      - "Christian_L"
+    audio_ext: [".wav", ".opus", ".waptt"]
+    glucose_unit: "mmol/L"
+    optimal_offset: 0
+    notes: "Christian Legler = Number 8 (from key). May not have audio."

@@ -1,0 +1,19 @@
+{
+  "running": true,
+  "pid": 32660,
+  "started_at": "2026-03-22T21:38:17",
+  "last_update": "2026-03-23T03:38:17",
+  "llm_model": "qwen2.5-coder:7b",
+  "cycle": 38,
+  "phase": "stage2_full_eval",
+  "best_selection_score": 12.513300758804519,
+  "log_path": "C:\\Users\\whgeb\\AutoResearch_WHG\\TONES\\output\\autoresearch\\autonomous_runs_v2.tsv",
+  "status_file": "C:\\Users\\whgeb\\AutoResearch_WHG\\TONES\\output\\autoresearch\\status.json",
+  "pid_file": "C:\\Users\\whgeb\\AutoResearch_WHG\\TONES\\output\\autoresearch\\loop.pid",
+  "optimizer_mode": "v2",
+  "selected_full_eval": 2,
+  "proposed": 6,
+  "stage2_completed": 0,
+  "stage2_total": 2,
+  "stage2_pending": 2
+}

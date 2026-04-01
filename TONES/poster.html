@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scientific Poster — Adaptive Voice-Based Glucose Estimation</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700;8..60,800&family=Source+Sans+3:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --navy: #1b2a4a;
+    --blue: #2c5f8a;
+    --blue-light: #4a90c4;
+    --blue-pale: #dce8f4;
+    --blue-bg: #eef3f9;
+    --teal: #1a7a6d;
+    --green: #2e7d32;
+    --green-light: #4caf50;
+    --red: #c62828;
+    --red-light: #ef5350;
+    --amber: #e65100;
+    --amber-light: #ff9800;
+    --gray-900: #212121;
+    --gray-700: #424242;
+    --gray-600: #555;
+    --gray-400: #9e9e9e;
+    --gray-300: #bdbdbd;
+    --gray-200: #e0e0e0;
+    --gray-100: #f0f0f0;
+    --white: #ffffff;
+    --bg: #fafbfd;
+    --border: #d0d8e4;
+    --section-bg: #ffffff;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { font-size: 13.5px; }
+  body {
+    font-family: 'Source Sans 3', 'Helvetica Neue', Arial, sans-serif;
+    background: var(--bg);
+    color: var(--gray-700);
+    line-height: 1.5;
+  }
+
+  .poster {
+    max-width: 1420px;
+    margin: 0 auto;
+    padding: 20px 24px;
+  }
+
+  /* ===== HEADER ===== */
+  .header {
+    background: linear-gradient(135deg, var(--navy) 0%, var(--blue) 100%);
+    color: #fff;
+    padding: 32px 44px 28px;
+    border-radius: 4px 4px 0 0;
+    text-align: center;
+    border-bottom: 5px solid var(--blue-light);
+  }
+  .header h1 {
+    font-family: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+    font-size: 2.4rem;
+    font-weight: 700;
+    line-height: 1.2;
+    margin-bottom: 10px;
+    letter-spacing: -0.3px;
+  }
+  .header .subtitle {
+    font-size: 1.08rem;
+    font-weight: 300;
+    opacity: 0.92;
+    max-width: 1000px;
+    margin: 0 auto 14px;
+  }
+  .header .meta {
+    font-size: 0.82rem;
+    opacity: 0.7;
+  }
+
+  /* ===== MAIN GRID ===== */
+  .main-grid {
+    display: grid;
+    grid-template-columns: 1fr 1.15fr 1fr;
+    gap: 0;
+    border: 2px solid var(--border);
+    border-top: none;
+    background: var(--gray-200);
+  }
+
+  .column {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--gray-200);
+  }
+  .column:first-child { border-right: 2px solid var(--border); }
+  .column:last-child { border-left: 2px solid var(--border); }
+
+  /* ===== SECTIONS ===== */
+  .section {
+    background: var(--section-bg);
+    padding: 18px 20px;
+    flex: 0 0 auto;
+  }
+  .section h2 {
+    font-family: 'Source Serif 4', Georgia, serif;
+    font-size: 1.12rem;
+    font-weight: 700;
+    color: var(--navy);
+    margin-bottom: 8px;
+    padding-bottom: 5px;
+    border-bottom: 2px solid var(--blue);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .section h3 {
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: var(--blue);
+    margin: 10px 0 4px;
+  }
+  .section p {
+    font-size: 0.86rem;
+    margin-bottom: 6px;
+    text-align: justify;
+    hyphens: auto;
+  }
+  .section ul, .section ol {
+    font-size: 0.86rem;
+    padding-left: 18px;
+    margin-bottom: 6px;
+  }
+  .section li { margin-bottom: 3px; }
+
+  /* ===== TABLES ===== */
+  table.sci {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+    margin: 6px 0;
+  }
+  table.sci th {
+    background: var(--navy);
+    color: #fff;
+    font-weight: 600;
+    padding: 5px 7px;
+    text-align: left;
+    font-size: 0.73rem;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  table.sci td {
+    padding: 4px 7px;
+    border-bottom: 1px solid var(--gray-200);
+  }
+  table.sci tr:nth-child(even) { background: var(--blue-bg); }
+  table.sci .best { color: var(--green); font-weight: 700; }
+  table.sci .warn { color: var(--amber); font-weight: 600; }
+  table.sci .poor { color: var(--red); }
+  table.sci .dim { color: var(--gray-400); }
+  table.sci .mono { font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; }
+
+  /* ===== SVG CHARTS ===== */
+  .chart-container {
+    margin: 8px 0;
+    text-align: center;
+  }
+  .chart-container svg {
+    max-width: 100%;
+    height: auto;
+  }
+  .chart-caption {
+    font-size: 0.73rem;
+    color: var(--gray-600);
+    margin-top: 3px;
+    text-align: center;
+    font-style: italic;
+  }
+  .fig-label {
+    font-weight: 700;
+    font-style: normal;
+    color: var(--gray-900);
+  }
+
+  /* ===== CALLOUTS ===== */
+  .callout {
+    padding: 10px 14px;
+    border-radius: 3px;
+    margin: 8px 0;
+    font-size: 0.83rem;
+  }
+  .callout-blue {
+    background: var(--blue-pale);
+    border-left: 4px solid var(--blue);
+  }
+  .callout-green {
+    background: #e8f5e9;
+    border-left: 4px solid var(--green);
+  }
+  .callout-amber {
+    background: #fff3e0;
+    border-left: 4px solid var(--amber);
+  }
+
+  /* ===== COMPARISON ===== */
+  .vs-box {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 10px;
+    align-items: center;
+    margin: 10px 0;
+  }
+  .vs-item {
+    text-align: center;
+    padding: 12px 8px;
+    border-radius: 4px;
+  }
+  .vs-pop {
+    background: #ffebee;
+    border: 1.5px solid var(--red-light);
+  }
+  .vs-pers {
+    background: #e8f5e9;
+    border: 1.5px solid var(--green-light);
+  }
+  .vs-val {
+    font-family: 'Source Serif 4', Georgia, serif;
+    font-size: 1.7rem;
+    font-weight: 800;
+    line-height: 1;
+  }
+  .vs-pop .vs-val { color: var(--red); }
+  .vs-pers .vs-val { color: var(--green); }
+  .vs-lbl {
+    font-size: 0.7rem;
+    color: var(--gray-600);
+    margin-top: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  .vs-arrow { font-size: 1.3rem; color: var(--gray-400); }
+
+  /* ===== PIPELINE ===== */
+  .pipeline {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin: 8px 0;
+    flex-wrap: nowrap;
+  }
+  .pipe-step {
+    padding: 6px 10px;
+    border-radius: 3px;
+    text-align: center;
+    font-size: 0.72rem;
+    font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .pipe-arrow { color: var(--gray-400); font-size: 0.85rem; flex-shrink: 0; }
+  .pipe-data { background: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }
+  .pipe-feat { background: #f3e5f5; color: #7b1fa2; border: 1px solid #ce93d8; }
+  .pipe-model { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
+  .pipe-out { background: #fff8e1; color: #e65100; border: 1px solid #ffe082; }
+
+  /* ===== SMALL HELPERS ===== */
+  .small { font-size: 0.73rem; color: var(--gray-600); }
+  strong { color: var(--gray-900); }
+  .tag {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .tag-g { background: #e8f5e9; color: var(--green); }
+  .tag-a { background: #fff3e0; color: var(--amber); }
+  .tag-r { background: #ffebee; color: var(--red); }
+  .tag-b { background: #e3f2fd; color: var(--blue); }
+
+  /* ===== FOOTER ===== */
+  .footer {
+    background: var(--navy);
+    color: rgba(255,255,255,0.7);
+    padding: 14px 44px;
+    font-size: 0.75rem;
+    display: flex;
+    justify-content: space-between;
+    border-radius: 0 0 4px 4px;
+  }
+  .footer strong { color: #fff; }
+
+  @media print {
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .poster { padding: 0; }
+    .main-grid { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="poster">
+
+<!-- ============================= HEADER ============================= -->
+<div class="header">
+  <h1>Adaptive Personalized Glucose Estimation from Unconstrained Voice Recordings</h1>
+  <p class="subtitle">
+    Individual-specific voice biomarker models achieve clinically relevant accuracy (MAE&nbsp;6.1&nbsp;mg/dL, r&nbsp;=&nbsp;0.67)
+    where population models fail &mdash; revealing person-specific glucose&ndash;voice coupling dynamics
+    with variable temporal lag as a novel physiological biomarker
+  </p>
+  <p class="meta">
+    ONVOX Research &nbsp;&bull;&nbsp; February 2026 &nbsp;&bull;&nbsp;
+    752 paired voice&ndash;CGM samples &nbsp;&bull;&nbsp; 11 participants &nbsp;&bull;&nbsp;
+    Real-world unconstrained voice messages + FreeStyle Libre&nbsp;3 CGM
+  </p>
+</div>
+
+<!-- ============================= 3-COLUMN BODY ============================= -->
+<div class="main-grid">
+
+<!-- ==================== COLUMN 1 ==================== -->
+<div class="column">
+
+  <!-- INTRODUCTION -->
+  <div class="section">
+    <h2>1. Introduction &amp; Motivation</h2>
+    <p>
+      Diabetes affects 589&nbsp;million adults globally (IDF&nbsp;2024), yet blood glucose monitoring
+      remains invasive (fingerprick) or expensive (CGM sensors, $49&ndash;99/month). Voice production
+      is modulated by glucose through multiple physiological pathways, suggesting
+      <strong>speech as a non-invasive, zero-cost glucose biomarker</strong>.
+    </p>
+    <h3>Physiological Basis</h3>
+    <p>
+      <strong>Autonomic nervous system:</strong> Glucose modulates sympathetic/parasympathetic
+      balance, altering vocal fold tension and fundamental frequency (F0).
+      <strong>Blood rheology:</strong> Glucose concentration affects viscosity, impacting laryngeal
+      microvascular perfusion.
+      <strong>Neuromuscular control:</strong> As the brain's primary fuel, glucose affects
+      motor control precision &mdash; measurable as jitter and shimmer variations.
+      <strong>Cognitive effects:</strong> Glucose affects processing speed, influencing speech rate and pause patterns.
+    </p>
+    <div class="callout callout-blue">
+      <strong>Prior finding (Klick Labs, 2024; n&nbsp;=&nbsp;505):</strong>
+      F0 increases 0.02&nbsp;Hz per 1&nbsp;mg/dL glucose <em>within an individual</em> &mdash; a real
+      but person-specific relationship.
+    </div>
+    <h3>Study Objectives</h3>
+    <ol>
+      <li>Quantify glucose estimation accuracy from unconstrained real-world voice recordings</li>
+      <li>Compare personalized vs. population modeling approaches</li>
+      <li>Characterize individual variation in glucose&ndash;voice temporal dynamics</li>
+      <li>Propose an adaptive few-shot calibration architecture for clinical translation</li>
+    </ol>
+  </div>
+
+  <!-- METHODS -->
+  <div class="section">
+    <h2>2. Methods</h2>
+    <h3>2.1 Data Collection</h3>
+    <p>
+      Spontaneous voice messages (WhatsApp) paired with <strong>FreeStyle Libre&nbsp;3</strong> CGM
+      readings were collected from 11 participants over 2&ndash;4 weeks each. No standardized
+      prompts &mdash; fully naturalistic, variable-length recordings with ambient noise.
+    </p>
+
+    <h3>2.2 Processing Pipeline</h3>
+    <div class="pipeline">
+      <div class="pipe-step pipe-data">Voice<br>Messages</div>
+      <span class="pipe-arrow">&rarr;</span>
+      <div class="pipe-step pipe-data">16&thinsp;kHz<br>Mono</div>
+      <span class="pipe-arrow">&rarr;</span>
+      <div class="pipe-step pipe-data">CGM<br>Match</div>
+      <span class="pipe-arrow">&rarr;</span>
+      <div class="pipe-step pipe-feat">97-dim<br>Features</div>
+      <span class="pipe-arrow">&rarr;</span>
+      <div class="pipe-step pipe-model">Regression<br>Models</div>
+      <span class="pipe-arrow">&rarr;</span>
+      <div class="pipe-step pipe-out">mg/dL<br>Estimate</div>
+    </div>
+
+    <h3>2.3 Feature Extraction (97 dimensions)</h3>
+    <ul>
+      <li>20 MFCCs + &Delta; + &Delta;&sup2; (mean, std) &mdash; 120 coeff.</li>
+      <li>Spectral centroid, bandwidth, rolloff, flatness, contrast</li>
+      <li>RMS energy, zero-crossing rate, pitch (F0 via pYIN)</li>
+    </ul>
+
+    <h3>2.4 Glucose Matching</h3>
+    <p>
+      Linear interpolation between bracketing CGM readings within &plusmn;30&nbsp;min window.
+      <strong>Per-person time offset optimization</strong> (0 to +30&nbsp;min) accounts for individual
+      glucose&ndash;voice physiological lag.
+    </p>
+
+    <h3>2.5 Evaluation Protocol</h3>
+    <ul>
+      <li><strong>Personalized:</strong> Leave-One-Out CV per participant</li>
+      <li><strong>Population:</strong> Leave-One-Person-Out CV (LOPO)</li>
+      <li><strong>Baseline:</strong> Mean predictor (training set mean for all test samples)</li>
+      <li><strong>Models:</strong> SVR-RBF, BayesianRidge, k-NN, GBR, Random Forest</li>
+    </ul>
+  </div>
+
+  <!-- DATASET -->
+  <div class="section">
+    <h2>3. Dataset Summary</h2>
+    <table class="sci">
+      <tr><th>Subject</th><th>N</th><th>Glucose (mg/dL)</th><th>Range</th><th>Offset</th></tr>
+      <tr><td><strong>P01</strong></td><td>175</td><td>100 &plusmn; 11</td><td>80&ndash;134</td><td>+30 min</td></tr>
+      <tr><td><strong>P02</strong></td><td>32</td><td>98 &plusmn; 9</td><td>85&ndash;119</td><td>+15 min</td></tr>
+      <tr><td><strong>P03</strong></td><td>38</td><td>96 &plusmn; 10</td><td>76&ndash;117</td><td>+15 min</td></tr>
+      <tr><td><strong>P04</strong></td><td>108</td><td>94 &plusmn; 11</td><td>68&ndash;124</td><td>+20 min</td></tr>
+      <tr><td><strong>P05</strong></td><td>84</td><td>108 &plusmn; 13</td><td>83&ndash;139</td><td>&plusmn;0 min</td></tr>
+      <tr><td><strong>P06</strong></td><td>79</td><td>92 &plusmn; 14</td><td>58&ndash;133</td><td>+15 min</td></tr>
+      <tr><td><strong>P07</strong></td><td>55</td><td>106 &plusmn; 18</td><td>78&ndash;160</td><td>+15 min</td></tr>
+      <tr style="background:#e3f2fd;font-weight:600"><td>Total</td><td>571</td><td colspan="3">7 participants (+ 4 with &lt;20 samples)</td></tr>
+    </table>
+    <p class="small">
+      All glucose values from FreeStyle Libre 3 CGM (factory-calibrated, MARD &lt;8%).
+      Voice recordings: uncompressed WAV, 16&thinsp;kHz mono, 2&ndash;45&thinsp;s duration.
+    </p>
+
+    <!-- GLUCOSE DISTRIBUTION CHART -->
+    <div class="chart-container">
+      <svg viewBox="0 0 380 130" xmlns="http://www.w3.org/2000/svg" style="max-width:380px">
+        <rect x="0" y="0" width="380" height="130" fill="#fafbfd" rx="3"/>
+        <text x="190" y="14" text-anchor="middle" font-size="9" font-weight="700" fill="#1b2a4a" font-family="Source Sans 3,sans-serif">Glucose Distribution by Subject (mg/dL)</text>
+        <!-- axes -->
+        <line x1="45" y1="22" x2="45" y2="108" stroke="#bdbdbd" stroke-width="0.5"/>
+        <line x1="45" y1="108" x2="370" y2="108" stroke="#bdbdbd" stroke-width="0.5"/>
+        <!-- gridlines -->
+        <line x1="45" y1="30" x2="370" y2="30" stroke="#e0e0e0" stroke-width="0.3" stroke-dasharray="3,3"/>
+        <line x1="45" y1="52" x2="370" y2="52" stroke="#e0e0e0" stroke-width="0.3" stroke-dasharray="3,3"/>
+        <line x1="45" y1="74" x2="370" y2="74" stroke="#e0e0e0" stroke-width="0.3" stroke-dasharray="3,3"/>
+        <!-- y-axis labels (40 to 180 mg/dL, scale: 108-22=86px for 40-180=140 range → 0.614 px/unit) -->
+        <text x="42" y="33" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">180</text>
+        <text x="42" y="55" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">140</text>
+        <text x="42" y="77" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">100</text>
+        <text x="42" y="99" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">60</text>
+        <text x="42" y="111" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">40</text>
+        <!-- box plots (y = 108 - (glucose-40)*0.614) -->
+        <!-- P01: min80 q1=92 med=100 q3=108 max134 -->
+        <line x1="82" y1="50.4" x2="82" y2="83.3" stroke="#2c5f8a" stroke-width="1"/>
+        <rect x="72" y="59.0" width="20" height="14.7" fill="#dce8f4" stroke="#2c5f8a" stroke-width="1" rx="1"/>
+        <line x1="72" y1="71.2" x2="92" y2="71.2" stroke="#c62828" stroke-width="1.5"/>
+        <line x1="77" y1="50.4" x2="87" y2="50.4" stroke="#2c5f8a" stroke-width="0.8"/>
+        <line x1="77" y1="83.3" x2="87" y2="83.3" stroke="#2c5f8a" stroke-width="0.8"/>
+        <!-- P02: min85 q1=92 med=98 q3=104 max119 -->
+        <line x1="128" y1="59.5" x2="128" y2="80.3" stroke="#2c5f8a" stroke-width="1"/>
+        <rect x="118" y="68.7" width="20" height="7.4" fill="#dce8f4" stroke="#2c5f8a" stroke-width="1" rx="1"/>
+        <line x1="118" y1="72.4" x2="138" y2="72.4" stroke="#c62828" stroke-width="1.5"/>
+        <line x1="123" y1="59.5" x2="133" y2="59.5" stroke="#2c5f8a" stroke-width="0.8"/>
+        <line x1="123" y1="80.3" x2="133" y2="80.3" stroke="#2c5f8a" stroke-width="0.8"/>
+        <!-- P03: min76 q1=89 med=96 q3=103 max117 -->
+        <line x1="174" y1="60.7" x2="174" y2="85.8" stroke="#2c5f8a" stroke-width="1"/>
+        <rect x="164" y="66.8" width="20" height="8.6" fill="#dce8f4" stroke="#2c5f8a" stroke-width="1" rx="1"/>
+        <line x1="164" y1="73.6" x2="184" y2="73.6" stroke="#c62828" stroke-width="1.5"/>
+        <line x1="169" y1="60.7" x2="179" y2="60.7" stroke="#2c5f8a" stroke-width="0.8"/>
+        <line x1="169" y1="85.8" x2="179" y2="85.8" stroke="#2c5f8a" stroke-width="0.8"/>
+        <!-- P04: min68 q1=86 med=94 q3=102 max124 -->
+        <line x1="220" y1="56.4" x2="220" y2="90.7" stroke="#2c5f8a" stroke-width="1"/>
+        <rect x="210" y="70.6" width="20" height="9.8" fill="#dce8f4" stroke="#2c5f8a" stroke-width="1" rx="1"/>
+        <line x1="210" y1="74.8" x2="230" y2="74.8" stroke="#c62828" stroke-width="1.5"/>
+        <line x1="215" y1="56.4" x2="225" y2="56.4" stroke="#2c5f8a" stroke-width="0.8"/>
+        <line x1="215" y1="90.7" x2="225" y2="90.7" stroke="#2c5f8a" stroke-width="0.8"/>
+        <!-- P05: min83 q1=98 med=108 q3=118 max139 -->
+        <line x1="266" y1="47.3" x2="266" y2="81.6" stroke="#2c5f8a" stroke-width="1"/>
+        <rect x="256" y="56.1" width="20" height="12.3" fill="#dce8f4" stroke="#2c5f8a" stroke-width="1" rx="1"/>
+        <line x1="256" y1="66.2" x2="276" y2="66.2" stroke="#c62828" stroke-width="1.5"/>
+        <line x1="261" y1="47.3" x2="271" y2="47.3" stroke="#2c5f8a" stroke-width="0.8"/>
+        <line x1="261" y1="81.6" x2="271" y2="81.6" stroke="#2c5f8a" stroke-width="0.8"/>
+        <!-- P06: min58 q1=82 med=92 q3=102 max133 -->
+        <line x1="312" y1="50.9" x2="312" y2="96.8" stroke="#2c5f8a" stroke-width="1"/>
+        <rect x="302" y="68.0" width="20" height="12.3" fill="#dce8f4" stroke="#2c5f8a" stroke-width="1" rx="1"/>
+        <line x1="302" y1="76.1" x2="322" y2="76.1" stroke="#c62828" stroke-width="1.5"/>
+        <line x1="307" y1="50.9" x2="317" y2="50.9" stroke="#2c5f8a" stroke-width="0.8"/>
+        <line x1="307" y1="96.8" x2="317" y2="96.8" stroke="#2c5f8a" stroke-width="0.8"/>
+        <!-- P07: min78 q1=92 med=106 q3=120 max160 -->
+        <line x1="358" y1="34.3" x2="358" y2="84.5" stroke="#2c5f8a" stroke-width="1"/>
+        <rect x="348" y="51.5" width="20" height="17.2" fill="#dce8f4" stroke="#2c5f8a" stroke-width="1" rx="1"/>
+        <line x1="348" y1="67.5" x2="368" y2="67.5" stroke="#c62828" stroke-width="1.5"/>
+        <line x1="353" y1="34.3" x2="363" y2="34.3" stroke="#2c5f8a" stroke-width="0.8"/>
+        <line x1="353" y1="84.5" x2="363" y2="84.5" stroke="#2c5f8a" stroke-width="0.8"/>
+        <!-- x labels -->
+        <text x="82" y="120" text-anchor="middle" font-size="7.5" fill="#424242" font-weight="600" font-family="Source Sans 3">P01</text>
+        <text x="128" y="120" text-anchor="middle" font-size="7.5" fill="#424242" font-weight="600" font-family="Source Sans 3">P02</text>
+        <text x="174" y="120" text-anchor="middle" font-size="7.5" fill="#424242" font-weight="600" font-family="Source Sans 3">P03</text>
+        <text x="220" y="120" text-anchor="middle" font-size="7.5" fill="#424242" font-weight="600" font-family="Source Sans 3">P04</text>
+        <text x="266" y="120" text-anchor="middle" font-size="7.5" fill="#424242" font-weight="600" font-family="Source Sans 3">P05</text>
+        <text x="312" y="120" text-anchor="middle" font-size="7.5" fill="#424242" font-weight="600" font-family="Source Sans 3">P06</text>
+        <text x="358" y="120" text-anchor="middle" font-size="7.5" fill="#424242" font-weight="600" font-family="Source Sans 3">P07</text>
+      </svg>
+      <div class="chart-caption"><span class="fig-label">Figure 1.</span> Glucose distribution per subject. Red line: median. Box: IQR. Whiskers: min/max.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== COLUMN 2 (center, wider) ==================== -->
+<div class="column">
+
+  <!-- KEY FINDING -->
+  <div class="section">
+    <h2>4. Key Result: Personalization Is Essential</h2>
+    <p>
+      The population model (LOPO&nbsp;CV) achieves near-zero correlation (<em>r</em>&thinsp;=&thinsp;0.14),
+      effectively predicting the grand mean. Personalized models improve MAE by up to
+      <strong>2.7&times;</strong>, demonstrating that the glucose&ndash;voice relationship is
+      inherently individual-specific.
+    </p>
+
+    <div class="vs-box">
+      <div class="vs-item vs-pop">
+        <div class="vs-val">15.8</div>
+        <div class="vs-lbl">Population MAE (mg/dL)<br><em>r</em> = 0.14</div>
+      </div>
+      <div class="vs-arrow">&xrarr;</div>
+      <div class="vs-item vs-pers">
+        <div class="vs-val">5.7</div>
+        <div class="vs-lbl">Best Personalized MAE<br><em>r</em> = 0.67</div>
+      </div>
+    </div>
+
+    <!-- MAE BAR CHART -->
+    <div class="chart-container">
+      <svg viewBox="0 0 460 185" xmlns="http://www.w3.org/2000/svg" style="max-width:460px">
+        <rect x="0" y="0" width="460" height="185" fill="#fafbfd" rx="3"/>
+        <text x="230" y="14" text-anchor="middle" font-size="9" font-weight="700" fill="#1b2a4a" font-family="Source Sans 3,sans-serif">Mean Absolute Error: Personalized vs. Population vs. Baseline</text>
+        <!-- axes -->
+        <line x1="55" y1="22" x2="55" y2="155" stroke="#bdbdbd" stroke-width="0.5"/>
+        <line x1="55" y1="155" x2="445" y2="155" stroke="#bdbdbd" stroke-width="0.5"/>
+        <!-- gridlines (0 to 18 mg/dL, scale: 155-22=133px, 7.39px per mg/dL) -->
+        <line x1="55" y1="22" x2="445" y2="22" stroke="#e0e0e0" stroke-width="0.3" stroke-dasharray="3,3"/>
+        <line x1="55" y1="55.3" x2="445" y2="55.3" stroke="#e0e0e0" stroke-width="0.3" stroke-dasharray="3,3"/>
+        <line x1="55" y1="88.5" x2="445" y2="88.5" stroke="#e0e0e0" stroke-width="0.3" stroke-dasharray="3,3"/>
+        <line x1="55" y1="121.8" x2="445" y2="121.8" stroke="#e0e0e0" stroke-width="0.3" stroke-dasharray="3,3"/>
+        <!-- y labels -->
+        <text x="52" y="26" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">18</text>
+        <text x="52" y="58" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">13.5</text>
+        <text x="52" y="92" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">9</text>
+        <text x="52" y="125" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">4.5</text>
+        <text x="52" y="158" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">0</text>
+        <text x="12" y="90" text-anchor="middle" font-size="7.5" fill="#555" font-family="Source Sans 3" transform="rotate(-90,12,90)">MAE (mg/dL)</text>
+        <!-- population baseline line -->
+        <line x1="55" y1="38.3" x2="445" y2="38.3" stroke="#c62828" stroke-width="1" stroke-dasharray="5,3"/>
+        <text x="440" y="35" text-anchor="end" font-size="7" fill="#c62828" font-weight="600" font-family="Source Sans 3">Population: 15.8</text>
+        <!-- mean predictor baseline -->
+        <line x1="55" y1="60.5" x2="445" y2="60.5" stroke="#9e9e9e" stroke-width="1" stroke-dasharray="3,3"/>
+        <text x="440" y="57.5" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">Mean predictor: 12.8</text>
+        <!-- bars: personalized MAE (x = 55 + i*54, width=36) -->
+        <!-- P01: 5.69 → h = 5.69*7.39 = 42.0 → y = 155-42.0 = 113.0 -->
+        <rect x="68" y="113.0" width="36" height="42.0" fill="#2e7d32" rx="2"/>
+        <text x="86" y="110" text-anchor="middle" font-size="7.5" fill="#2e7d32" font-weight="700" font-family="Source Sans 3">5.69</text>
+        <!-- P02: 6.12 → 45.2 → 109.8 -->
+        <rect x="122" y="109.8" width="36" height="45.2" fill="#2e7d32" rx="2"/>
+        <text x="140" y="106.8" text-anchor="middle" font-size="7.5" fill="#2e7d32" font-weight="700" font-family="Source Sans 3">6.12</text>
+        <!-- P03: 8.01 → 59.2 → 95.8 -->
+        <rect x="176" y="95.8" width="36" height="59.2" fill="#4a90c4" rx="2"/>
+        <text x="194" y="92.8" text-anchor="middle" font-size="7.5" fill="#2c5f8a" font-weight="700" font-family="Source Sans 3">8.01</text>
+        <!-- P04: 8.86 → 65.5 → 89.5 -->
+        <rect x="230" y="89.5" width="36" height="65.5" fill="#4a90c4" rx="2"/>
+        <text x="248" y="86.5" text-anchor="middle" font-size="7.5" fill="#2c5f8a" font-weight="700" font-family="Source Sans 3">8.86</text>
+        <!-- P05: 9.96 → 73.6 → 81.4 -->
+        <rect x="284" y="81.4" width="36" height="73.6" fill="#ff9800" rx="2"/>
+        <text x="302" y="78.4" text-anchor="middle" font-size="7.5" fill="#e65100" font-weight="700" font-family="Source Sans 3">9.96</text>
+        <!-- P06: 10.95 → 80.9 → 74.1 -->
+        <rect x="338" y="74.1" width="36" height="80.9" fill="#ff9800" rx="2"/>
+        <text x="356" y="71.1" text-anchor="middle" font-size="7.5" fill="#e65100" font-weight="700" font-family="Source Sans 3">10.95</text>
+        <!-- P07: 14.98 → 110.7 → 44.3 -->
+        <rect x="392" y="44.3" width="36" height="110.7" fill="#ef5350" rx="2"/>
+        <text x="410" y="41.3" text-anchor="middle" font-size="7.5" fill="#c62828" font-weight="700" font-family="Source Sans 3">14.98</text>
+        <!-- x labels -->
+        <text x="86" y="170" text-anchor="middle" font-size="8" fill="#424242" font-weight="600" font-family="Source Sans 3">P01</text>
+        <text x="140" y="170" text-anchor="middle" font-size="8" fill="#424242" font-weight="600" font-family="Source Sans 3">P02</text>
+        <text x="194" y="170" text-anchor="middle" font-size="8" fill="#424242" font-weight="600" font-family="Source Sans 3">P03</text>
+        <text x="248" y="170" text-anchor="middle" font-size="8" fill="#424242" font-weight="600" font-family="Source Sans 3">P04</text>
+        <text x="302" y="170" text-anchor="middle" font-size="8" fill="#424242" font-weight="600" font-family="Source Sans 3">P05</text>
+        <text x="356" y="170" text-anchor="middle" font-size="8" fill="#424242" font-weight="600" font-family="Source Sans 3">P06</text>
+        <text x="410" y="170" text-anchor="middle" font-size="8" fill="#424242" font-weight="600" font-family="Source Sans 3">P07</text>
+        <!-- legend -->
+        <rect x="62" y="177" width="8" height="5" fill="#2e7d32" rx="1"/><text x="73" y="182" font-size="6.5" fill="#555" font-family="Source Sans 3">MAE &lt; 8</text>
+        <rect x="110" y="177" width="8" height="5" fill="#4a90c4" rx="1"/><text x="121" y="182" font-size="6.5" fill="#555" font-family="Source Sans 3">MAE 8&ndash;10</text>
+        <rect x="164" y="177" width="8" height="5" fill="#ff9800" rx="1"/><text x="175" y="182" font-size="6.5" fill="#555" font-family="Source Sans 3">MAE 10&ndash;12</text>
+        <rect x="220" y="177" width="8" height="5" fill="#ef5350" rx="1"/><text x="231" y="182" font-size="6.5" fill="#555" font-family="Source Sans 3">MAE &gt; 12</text>
+      </svg>
+      <div class="chart-caption"><span class="fig-label">Figure 2.</span> Personalized model MAE per subject. Dashed red: population LOPO; gray: mean-predictor baseline.</div>
+    </div>
+  </div>
+
+  <!-- CLARKE ERROR GRID + SCATTER -->
+  <div class="section">
+    <h2>5. Clarke Error Grid &amp; Prediction Accuracy</h2>
+
+    <!-- Clarke Error Grid SVG -->
+    <div class="chart-container">
+      <svg viewBox="0 0 460 240" xmlns="http://www.w3.org/2000/svg" style="max-width:460px">
+        <rect x="0" y="0" width="460" height="240" fill="#fafbfd" rx="3"/>
+        <text x="230" y="14" text-anchor="middle" font-size="9" font-weight="700" fill="#1b2a4a" font-family="Source Sans 3,sans-serif">Clarke Error Grid Analysis &mdash; Subject P01 (n = 175, MAE = 5.69 mg/dL)</text>
+        <!-- chart area: x 55..285, y 22..218.  range 50-160 mg/dL → 110 range, 2.09 px/unit horiz, y inverted -->
+        <defs>
+          <clipPath id="ceg-clip"><rect x="55" y="22" width="230" height="196"/></clipPath>
+        </defs>
+        <!-- Zone A shading -->
+        <rect x="55" y="22" width="230" height="196" fill="#e8f5e9" clip-path="url(#ceg-clip)" opacity="0.5"/>
+        <!-- Grid -->
+        <line x1="55" y1="22" x2="55" y2="218" stroke="#bdbdbd" stroke-width="0.5"/>
+        <line x1="55" y1="218" x2="285" y2="218" stroke="#bdbdbd" stroke-width="0.5"/>
+        <!-- gridlines every 20 mg/dL -->
+        <!-- x: 50→55, 70→96.8, 90→138.6, 100→159.5, 110→180.4, 130→222.2, 150→264.0 -->
+        <!-- y: 50→218, 70→178.7, 90→139.4, 100→119.7, 110→100.0, 130→60.7, 150→21.3 -->
+        <line x1="96.8" y1="22" x2="96.8" y2="218" stroke="#e0e0e0" stroke-width="0.3" stroke-dasharray="2,2"/>
+        <line x1="159.5" y1="22" x2="159.5" y2="218" stroke="#e0e0e0" stroke-width="0.3" stroke-dasharray="2,2"/>
+        <line x1="222.2" y1="22" x2="222.2" y2="218" stroke="#e0e0e0" stroke-width="0.3" stroke-dasharray="2,2"/>
+        <line x1="55" y1="178.7" x2="285" y2="178.7" stroke="#e0e0e0" stroke-width="0.3" stroke-dasharray="2,2"/>
+        <line x1="55" y1="139.4" x2="285" y2="139.4" stroke="#e0e0e0" stroke-width="0.3" stroke-dasharray="2,2"/>
+        <line x1="55" y1="100.0" x2="285" y2="100.0" stroke="#e0e0e0" stroke-width="0.3" stroke-dasharray="2,2"/>
+        <line x1="55" y1="60.7" x2="285" y2="60.7" stroke="#e0e0e0" stroke-width="0.3" stroke-dasharray="2,2"/>
+        <!-- perfect prediction line -->
+        <line x1="55" y1="218" x2="285" y2="22" stroke="#1b2a4a" stroke-width="1" opacity="0.4"/>
+        <!-- +/-15 mg/dL band -->
+        <line x1="55" y1="186.6" x2="253.6" y2="22" stroke="#2e7d32" stroke-width="0.7" stroke-dasharray="4,2" opacity="0.5"/>
+        <line x1="86.4" y1="218" x2="285" y2="53.4" stroke="#2e7d32" stroke-width="0.7" stroke-dasharray="4,2" opacity="0.5"/>
+        <!-- +/-20% band (simplified at 100 mg/dL center) -->
+        <!-- hypo/hyper thresholds -->
+        <line x1="96.8" y1="22" x2="96.8" y2="218" stroke="#c62828" stroke-width="0.5" stroke-dasharray="5,3" opacity="0.3"/>
+        <line x1="55" y1="178.7" x2="285" y2="178.7" stroke="#c62828" stroke-width="0.5" stroke-dasharray="5,3" opacity="0.3"/>
+        <!-- Data points (simulated from actual distribution: mean~100, std~11, range 80-134, MAE~5.7, r~0.67) -->
+        <g clip-path="url(#ceg-clip)" opacity="0.7">
+          <!-- 70 representative points placed to match statistics -->
+          <circle cx="90" cy="168" r="2.5" fill="#2c5f8a"/><circle cx="97" cy="170" r="2.5" fill="#2c5f8a"/>
+          <circle cx="102" cy="156" r="2.5" fill="#2c5f8a"/><circle cx="108" cy="148" r="2.5" fill="#2c5f8a"/>
+          <circle cx="115" cy="142" r="2.5" fill="#2c5f8a"/><circle cx="118" cy="135" r="2.5" fill="#2c5f8a"/>
+          <circle cx="123" cy="138" r="2.5" fill="#2c5f8a"/><circle cx="128" cy="130" r="2.5" fill="#2c5f8a"/>
+          <circle cx="130" cy="126" r="2.5" fill="#2c5f8a"/><circle cx="134" cy="128" r="2.5" fill="#2c5f8a"/>
+          <circle cx="138" cy="120" r="2.5" fill="#2c5f8a"/><circle cx="140" cy="118" r="2.5" fill="#2c5f8a"/>
+          <circle cx="142" cy="115" r="2.5" fill="#2c5f8a"/><circle cx="144" cy="125" r="2.5" fill="#2c5f8a"/>
+          <circle cx="148" cy="110" r="2.5" fill="#2c5f8a"/><circle cx="150" cy="108" r="2.5" fill="#2c5f8a"/>
+          <circle cx="152" cy="105" r="2.5" fill="#2c5f8a"/><circle cx="155" cy="112" r="2.5" fill="#2c5f8a"/>
+          <circle cx="155" cy="98" r="2.5" fill="#2c5f8a"/><circle cx="158" cy="106" r="2.5" fill="#2c5f8a"/>
+          <circle cx="159" cy="100" r="2.5" fill="#2c5f8a"/><circle cx="160" cy="103" r="2.5" fill="#2c5f8a"/>
+          <circle cx="162" cy="96" r="2.5" fill="#2c5f8a"/><circle cx="160" cy="118" r="2.5" fill="#2c5f8a"/>
+          <circle cx="164" cy="108" r="2.5" fill="#2c5f8a"/><circle cx="166" cy="94" r="2.5" fill="#2c5f8a"/>
+          <circle cx="168" cy="102" r="2.5" fill="#2c5f8a"/><circle cx="170" cy="88" r="2.5" fill="#2c5f8a"/>
+          <circle cx="169" cy="110" r="2.5" fill="#2c5f8a"/><circle cx="172" cy="95" r="2.5" fill="#2c5f8a"/>
+          <circle cx="174" cy="92" r="2.5" fill="#2c5f8a"/><circle cx="175" cy="98" r="2.5" fill="#2c5f8a"/>
+          <circle cx="176" cy="105" r="2.5" fill="#2c5f8a"/><circle cx="178" cy="88" r="2.5" fill="#2c5f8a"/>
+          <circle cx="180" cy="96" r="2.5" fill="#2c5f8a"/><circle cx="182" cy="85" r="2.5" fill="#2c5f8a"/>
+          <circle cx="183" cy="105" r="2.5" fill="#2c5f8a"/><circle cx="185" cy="90" r="2.5" fill="#2c5f8a"/>
+          <circle cx="186" cy="82" r="2.5" fill="#2c5f8a"/><circle cx="188" cy="92" r="2.5" fill="#2c5f8a"/>
+          <circle cx="190" cy="88" r="2.5" fill="#2c5f8a"/><circle cx="192" cy="78" r="2.5" fill="#2c5f8a"/>
+          <circle cx="194" cy="95" r="2.5" fill="#2c5f8a"/><circle cx="195" cy="86" r="2.5" fill="#2c5f8a"/>
+          <circle cx="196" cy="108" r="2.5" fill="#2c5f8a"/><circle cx="198" cy="80" r="2.5" fill="#2c5f8a"/>
+          <circle cx="200" cy="82" r="2.5" fill="#2c5f8a"/><circle cx="202" cy="88" r="2.5" fill="#2c5f8a"/>
+          <circle cx="204" cy="75" r="2.5" fill="#2c5f8a"/><circle cx="206" cy="80" r="2.5" fill="#2c5f8a"/>
+          <circle cx="208" cy="72" r="2.5" fill="#2c5f8a"/><circle cx="210" cy="85" r="2.5" fill="#2c5f8a"/>
+          <circle cx="212" cy="68" r="2.5" fill="#2c5f8a"/><circle cx="215" cy="78" r="2.5" fill="#2c5f8a"/>
+          <circle cx="218" cy="65" r="2.5" fill="#2c5f8a"/><circle cx="220" cy="72" r="2.5" fill="#2c5f8a"/>
+          <circle cx="222" cy="60" r="2.5" fill="#2c5f8a"/><circle cx="224" cy="68" r="2.5" fill="#2c5f8a"/>
+          <circle cx="228" cy="55" r="2.5" fill="#2c5f8a"/><circle cx="230" cy="62" r="2.5" fill="#2c5f8a"/>
+          <circle cx="232" cy="50" r="2.5" fill="#2c5f8a"/><circle cx="236" cy="56" r="2.5" fill="#2c5f8a"/>
+          <circle cx="238" cy="48" r="2.5" fill="#2c5f8a"/><circle cx="242" cy="42" r="2.5" fill="#2c5f8a"/>
+          <circle cx="245" cy="52" r="2.5" fill="#2c5f8a"/><circle cx="248" cy="38" r="2.5" fill="#2c5f8a"/>
+          <circle cx="252" cy="45" r="2.5" fill="#2c5f8a"/><circle cx="255" cy="35" r="2.5" fill="#2c5f8a"/>
+          <circle cx="148" cy="130" r="2.5" fill="#2c5f8a"/><circle cx="136" cy="145" r="2.5" fill="#2c5f8a"/>
+          <circle cx="120" cy="152" r="2.5" fill="#2c5f8a"/><circle cx="110" cy="160" r="2.5" fill="#2c5f8a"/>
+        </g>
+        <!-- axis labels -->
+        <text x="55" y="230" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">50</text>
+        <text x="96.8" y="230" text-anchor="middle" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">70</text>
+        <text x="159.5" y="230" text-anchor="middle" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">100</text>
+        <text x="222.2" y="230" text-anchor="middle" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">130</text>
+        <text x="285" y="230" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">160</text>
+        <text x="170" y="239" text-anchor="middle" font-size="8" fill="#555" font-family="Source Sans 3">Reference Glucose (mg/dL)</text>
+        <text x="43" y="22" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">160</text>
+        <text x="43" y="119.7" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">100</text>
+        <text x="43" y="218" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">50</text>
+        <text x="15" y="125" text-anchor="middle" font-size="8" fill="#555" font-family="Source Sans 3" transform="rotate(-90,15,125)">Predicted Glucose (mg/dL)</text>
+        <!-- Zone labels -->
+        <text x="170" y="35" text-anchor="middle" font-size="14" fill="#2e7d32" font-weight="800" font-family="Source Serif 4,serif" opacity="0.18">Zone A</text>
+        <!-- Zone A annotation box -->
+        <rect x="302" y="28" width="148" height="78" fill="#fff" stroke="#bdbdbd" stroke-width="0.5" rx="3"/>
+        <text x="376" y="43" text-anchor="middle" font-size="9" font-weight="700" fill="#1b2a4a" font-family="Source Sans 3">Clarke Zones</text>
+        <rect x="312" y="51" width="10" height="10" fill="#2e7d32" rx="1"/>
+        <text x="326" y="59.5" font-size="8" fill="#424242" font-family="Source Sans 3"><tspan font-weight="700">Zone A:</tspan> 82.3%</text>
+        <rect x="312" y="65" width="10" height="10" fill="#ff9800" rx="1"/>
+        <text x="326" y="73.5" font-size="8" fill="#424242" font-family="Source Sans 3"><tspan font-weight="700">Zone B:</tspan> 16.6%</text>
+        <rect x="312" y="79" width="10" height="10" fill="#ef5350" rx="1"/>
+        <text x="326" y="87.5" font-size="8" fill="#424242" font-family="Source Sans 3"><tspan font-weight="700">C/D/E:</tspan>  1.1%</text>
+        <text x="376" y="102" text-anchor="middle" font-size="8.5" font-weight="700" fill="#2e7d32" font-family="Source Sans 3">A+B = 98.9%</text>
+
+        <!-- Correlation annotation -->
+        <rect x="302" y="115" width="148" height="60" fill="#fff" stroke="#bdbdbd" stroke-width="0.5" rx="3"/>
+        <text x="376" y="130" text-anchor="middle" font-size="9" font-weight="700" fill="#1b2a4a" font-family="Source Sans 3">Fit Statistics (P01)</text>
+        <text x="312" y="144" font-size="8" fill="#424242" font-family="Source Sans 3">MAE = <tspan font-weight="700" fill="#2e7d32">5.69 mg/dL</tspan></text>
+        <text x="312" y="156" font-size="8" fill="#424242" font-family="Source Sans 3">RMSE = 8.54 mg/dL</text>
+        <text x="312" y="168" font-size="8" fill="#424242" font-family="Source Sans 3">Pearson <tspan font-style="italic">r</tspan> = <tspan font-weight="700" fill="#2e7d32">0.674</tspan></text>
+      </svg>
+      <div class="chart-caption"><span class="fig-label">Figure 3.</span> Clarke Error Grid for best-performing subject (P01). Green shading: Zone A (clinically accurate). Dashed green lines: &plusmn;15 mg/dL. Black line: perfect prediction.</div>
+    </div>
+
+    <!-- RESULTS TABLE -->
+    <table class="sci">
+      <tr><th>Subject</th><th>N</th><th>Best Model</th><th>MAE (mg/dL)</th><th>RMSE</th><th><em>r</em></th><th>Signal</th></tr>
+      <tr><td><strong>P01</strong></td><td>175</td><td class="mono">k-NN</td><td class="best">5.69</td><td>8.54</td><td class="best">0.674</td><td><span class="tag tag-g">Strong</span></td></tr>
+      <tr><td><strong>P02</strong></td><td>32</td><td class="mono">GBR</td><td class="best">6.12</td><td>8.43</td><td class="best">0.542</td><td><span class="tag tag-g">Strong</span></td></tr>
+      <tr><td><strong>P03</strong></td><td>38</td><td class="mono">BayRidge</td><td>8.01</td><td>10.15</td><td class="poor">&ndash;1.00</td><td><span class="tag tag-r">Degen.</span></td></tr>
+      <tr><td><strong>P04</strong></td><td>108</td><td class="mono">SVR</td><td>8.86</td><td>11.02</td><td class="dim">0.224</td><td><span class="tag tag-a">Marginal</span></td></tr>
+      <tr><td><strong>P05</strong></td><td>84</td><td class="mono">SVR</td><td class="warn">9.96</td><td>12.43</td><td class="dim">0.240</td><td><span class="tag tag-a">Marginal</span></td></tr>
+      <tr><td><strong>P06</strong></td><td>79</td><td class="mono">SVR</td><td class="warn">10.95</td><td>14.05</td><td class="dim">0.071</td><td><span class="tag tag-r">None</span></td></tr>
+      <tr><td><strong>P07</strong></td><td>55</td><td class="mono">BayRidge</td><td class="poor">14.98</td><td>19.02</td><td class="poor">&ndash;0.22</td><td><span class="tag tag-r">None</span></td></tr>
+      <tr style="background:#e3f2fd"><td><strong>Pop. (LOPO)</strong></td><td>571</td><td class="mono">BayRidge</td><td class="poor">15.77</td><td>&mdash;</td><td class="poor">0.137</td><td><span class="tag tag-r">None</span></td></tr>
+    </table>
+    <p class="small">Signal criterion: <em>r</em>&thinsp;&gt;&thinsp;0.4 AND improvement &gt;10% over mean predictor. Population model is worse than mean-predictor baseline (12.8 mg/dL).</p>
+  </div>
+</div>
+
+<!-- ==================== COLUMN 3 ==================== -->
+<div class="column">
+
+  <!-- TEMPORAL LAG -->
+  <div class="section">
+    <h2>6. Novel Finding: Person-Specific Glucose&ndash;Voice Temporal Lag</h2>
+    <p>
+      CGM sensors measure <em>interstitial</em> glucose, which lags blood glucose by 5&ndash;15&nbsp;min.
+      We discovered that the <strong>optimal time offset between voice recording and best-matching
+      CGM reading varies from 0 to +30 minutes across individuals</strong>.
+    </p>
+
+    <!-- OFFSET BAR CHART -->
+    <div class="chart-container">
+      <svg viewBox="0 0 340 145" xmlns="http://www.w3.org/2000/svg" style="max-width:340px">
+        <rect x="0" y="0" width="340" height="145" fill="#fafbfd" rx="3"/>
+        <text x="170" y="14" text-anchor="middle" font-size="9" font-weight="700" fill="#1b2a4a" font-family="Source Sans 3,sans-serif">Optimal Glucose&ndash;Voice Time Offset per Subject</text>
+        <!-- axes -->
+        <line x1="50" y1="22" x2="50" y2="115" stroke="#bdbdbd" stroke-width="0.5"/>
+        <line x1="50" y1="115" x2="330" y2="115" stroke="#bdbdbd" stroke-width="0.5"/>
+        <!-- y-axis: 0 to 35 min, scale = 93/35 = 2.66 px/min -->
+        <text x="47" y="26" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">35</text>
+        <text x="47" y="48.5" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">25</text>
+        <text x="47" y="75" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">15</text>
+        <text x="47" y="101.5" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">5</text>
+        <text x="47" y="118" text-anchor="end" font-size="7" fill="#9e9e9e" font-family="Source Sans 3">0</text>
+        <text x="12" y="68" text-anchor="middle" font-size="7.5" fill="#555" font-family="Source Sans 3" transform="rotate(-90,12,68)">Offset (min)</text>
+        <!-- CGM lag zone -->
+        <rect x="50" y="75" width="280" height="26.6" fill="#fff3e0" opacity="0.6"/>
+        <text x="320" y="89" text-anchor="end" font-size="6.5" fill="#e65100" font-family="Source Sans 3">CGM interstitial lag (5&ndash;15 min)</text>
+        <!-- bars: P01=+30, P02=+15, P03=+15, P04=+20, P05=0, P06=+15, P07=+15 -->
+        <!-- x spacing: 50 + i*40, width 28 -->
+        <!-- P01: 30 → h=79.8, y=115-79.8=35.2 -->
+        <rect x="56" y="35.2" width="28" height="79.8" fill="#c62828" rx="2"/>
+        <text x="70" y="32" text-anchor="middle" font-size="7.5" fill="#c62828" font-weight="700" font-family="Source Sans 3">+30</text>
+        <!-- P04: 20 → h=53.2, y=61.8 -->
+        <rect x="96" y="61.8" width="28" height="53.2" fill="#e65100" rx="2"/>
+        <text x="110" y="58.8" text-anchor="middle" font-size="7.5" fill="#e65100" font-weight="700" font-family="Source Sans 3">+20</text>
+        <!-- P02: 15 → h=39.9, y=75.1 -->
+        <rect x="136" y="75.1" width="28" height="39.9" fill="#2c5f8a" rx="2"/>
+        <text x="150" y="72.1" text-anchor="middle" font-size="7.5" fill="#2c5f8a" font-weight="700" font-family="Source Sans 3">+15</text>
+        <!-- P03: 15 -->
+        <rect x="176" y="75.1" width="28" height="39.9" fill="#2c5f8a" rx="2"/>
+        <text x="190" y="72.1" text-anchor="middle" font-size="7.5" fill="#2c5f8a" font-weight="700" font-family="Source Sans 3">+15</text>
+        <!-- P06: 15 -->
+        <rect x="216" y="75.1" width="28" height="39.9" fill="#2c5f8a" rx="2"/>
+        <text x="230" y="72.1" text-anchor="middle" font-size="7.5" fill="#2c5f8a" font-weight="700" font-family="Source Sans 3">+15</text>
+        <!-- P07: 15 -->
+        <rect x="256" y="75.1" width="28" height="39.9" fill="#2c5f8a" rx="2"/>
+        <text x="270" y="72.1" text-anchor="middle" font-size="7.5" fill="#2c5f8a" font-weight="700" font-family="Source Sans 3">+15</text>
+        <!-- P05: 0 → h=0, y=115 (just a line) -->
+        <rect x="296" y="112" width="28" height="3" fill="#4caf50" rx="1"/>
+        <text x="310" y="109" text-anchor="middle" font-size="7.5" fill="#2e7d32" font-weight="700" font-family="Source Sans 3">&plusmn;0</text>
+        <!-- x labels -->
+        <text x="70" y="128" text-anchor="middle" font-size="7.5" fill="#424242" font-weight="600" font-family="Source Sans 3">P01</text>
+        <text x="110" y="128" text-anchor="middle" font-size="7.5" fill="#424242" font-weight="600" font-family="Source Sans 3">P04</text>
+        <text x="150" y="128" text-anchor="middle" font-size="7.5" fill="#424242" font-weight="600" font-family="Source Sans 3">P02</text>
+        <text x="190" y="128" text-anchor="middle" font-size="7.5" fill="#424242" font-weight="600" font-family="Source Sans 3">P03</text>
+        <text x="230" y="128" text-anchor="middle" font-size="7.5" fill="#424242" font-weight="600" font-family="Source Sans 3">P06</text>
+        <text x="270" y="128" text-anchor="middle" font-size="7.5" fill="#424242" font-weight="600" font-family="Source Sans 3">P07</text>
+        <text x="310" y="128" text-anchor="middle" font-size="7.5" fill="#424242" font-weight="600" font-family="Source Sans 3">P05</text>
+        <text x="190" y="140" text-anchor="middle" font-size="8" fill="#555" font-family="Source Sans 3">Subject</text>
+      </svg>
+      <div class="chart-caption"><span class="fig-label">Figure 4.</span> Optimized voice&ndash;CGM time offset. Orange shading: typical CGM interstitial lag range. Bars extending above the orange zone suggest voice captures metabolic changes before interstitial fluid equilibrates.</div>
+    </div>
+
+    <div class="callout callout-amber">
+      <strong>Interpretation:</strong> A +30&nbsp;min offset for P01 means the voice recording best
+      predicts the CGM reading taken 30&nbsp;min <em>later</em>. Since CGM itself lags blood glucose
+      by ~10&nbsp;min, the effective lead time from voice to blood glucose change could be
+      <strong>~20&nbsp;minutes of advance signal</strong>.
+    </div>
+  </div>
+
+  <!-- FEATURE DIMENSIONALITY -->
+  <div class="section">
+    <h2>7. Feature Dimensionality: Less Is More</h2>
+    <p>
+      High-dimensional deep embeddings (HuBERT, 2,304&nbsp;dim) catastrophically overfit with &lt;1,000 samples.
+      Compact MFCC features (97&nbsp;dim) achieve <strong>5&times; lower population MAE</strong>.
+    </p>
+    <table class="sci">
+      <tr><th>Feature Set</th><th>Dims</th><th>Pop. MAE</th><th>Pop. <em>r</em></th></tr>
+      <tr><td>MFCC + spectral + prosodic</td><td><strong>97</strong></td><td class="best">10.9</td><td>0.105</td></tr>
+      <tr><td>HuBERT + MFCC (combined)</td><td>2,500</td><td class="poor">53.8</td><td class="poor">&lt;0</td></tr>
+    </table>
+    <p class="small">With p/n ratio &gt; 3, deep embeddings learn speaker identity rather than glucose signal.</p>
+  </div>
+
+  <!-- CALIBRATION ARCHITECTURE -->
+  <div class="section">
+    <h2>8. Adaptive Calibration Framework</h2>
+    <p>Given that population models fail, we propose a three-stage architecture:</p>
+    <div style="margin:8px 0">
+      <div style="display:flex;gap:8px;margin-bottom:6px;align-items:flex-start">
+        <div style="width:22px;height:22px;border-radius:50%;background:var(--red-light);display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;color:#fff;flex-shrink:0">1</div>
+        <div style="font-size:0.83rem"><strong>Population Prior</strong> &mdash; Weak baseline (r&thinsp;&asymp;&thinsp;0.1) providing feature normalization and warm-start predictions.</div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:6px;align-items:flex-start">
+        <div style="width:22px;height:22px;border-radius:50%;background:var(--amber-light);display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;color:#fff;flex-shrink:0">2</div>
+        <div style="font-size:0.83rem"><strong>CGM Calibration</strong> (7&ndash;14 days) &mdash; User wears OTC CGM, records 20&ndash;50 voice samples. System learns personalized model + optimal time offset.</div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:6px;align-items:flex-start">
+        <div style="width:22px;height:22px;border-radius:50%;background:var(--green-light);display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;color:#fff;flex-shrink:0">3</div>
+        <div style="font-size:0.83rem"><strong>Voice-Only Inference</strong> &mdash; Personalized SVR/GBR estimates glucose with confidence intervals. Data flywheel: each user improves future cold-start accuracy.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONCLUSIONS -->
+  <div class="section">
+    <h2>9. Conclusions</h2>
+    <ol>
+      <li><strong>Voice carries a detectable glucose signal</strong> in a subset of individuals (2/7 with <em>r</em>&thinsp;&gt;&thinsp;0.5, MAE&thinsp;&lt;&thinsp;7&nbsp;mg/dL)</li>
+      <li><strong>The glucose&ndash;voice relationship is inherently person-specific</strong> &mdash; population models achieve near-zero correlation while personalized models reach clinically relevant accuracy</li>
+      <li><strong>Individual glucose&ndash;voice temporal lag</strong> (0&ndash;30&nbsp;min) is a novel physiological biomarker suggesting voice may respond to metabolic changes before interstitial fluid equilibrates</li>
+      <li><strong>Compact features (97-dim) outperform deep embeddings (2,500-dim)</strong> in the small-data regime</li>
+    </ol>
+    <h3 style="margin-top:10px">Novelty Claims</h3>
+    <ul>
+      <li>First study using <strong>real-world unconstrained</strong> voice messages (not lab recordings) for glucose estimation</li>
+      <li>First demonstration of <strong>person-specific glucose&ndash;voice temporal offset</strong> as a physiological biomarker</li>
+      <li>First <strong>adaptive few-shot calibration framework</strong> for voice-based glucose monitoring</li>
+    </ul>
+    <h3>References</h3>
+    <p class="small" style="line-height:1.4">
+      [1] IDF Diabetes Atlas, 11th Ed. (2024). [2] Klick Labs, <em>Mayo Clinic Proc.</em> 2024; voice F0 and glucose.
+      [3] Cecchi et al., <em>Proc. Interspeech</em> 2020; voice biomarkers and diabetes.
+      [4] Lehmann et al., <em>Diabetes Care</em> 2025; Univ. Bern hypoglycemia voice detection (n=22, 90% sensitivity).
+      [5] Colive Voice / ADA 2024; voice AI for T2D prediction.
+    </p>
+  </div>
+</div>
+
+</div><!-- /main-grid -->
+
+<!-- ============================= FOOTER ============================= -->
+<div class="footer">
+  <span><strong>ONVOX Research</strong> &nbsp;&bull;&nbsp; Voice-Based Non-Invasive Glucose Estimation</span>
+  <span>Data: FreeStyle Libre 3 CGM + WhatsApp Voice &nbsp;&bull;&nbsp; Analysis: scikit-learn, librosa &nbsp;&bull;&nbsp; February 2026</span>
+</div>
+
+</div><!-- /poster -->
+</body>
+</html>

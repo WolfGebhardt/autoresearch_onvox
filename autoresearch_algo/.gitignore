@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+output/
+*.log
+*.err.log
+*.pid
+*.tsv
+output/autoresearch/*.json
+!run_artifacts/*.tsv
+
+.DS_Store
+Thumbs.db

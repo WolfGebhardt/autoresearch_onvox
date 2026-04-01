@@ -1,0 +1,91 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE / local
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cursor/
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Participant CGM / voice data (sensitive — do not publish without consent)
+TONES/Alvar/
+TONES/Anja/
+TONES/Bruno/
+TONES/Christian_L/
+TONES/Darav/
+TONES/Edoardo/
+TONES/Jacky/
+TONES/Joao/
+TONES/Lara/
+TONES/Margarita/
+TONES/R_Rodolfo/
+TONES/Steffen_Haeseli/
+TONES/Sybille/
+TONES/Valerie/
+TONES/Vicky/
+TONES/Wolf/
+TONES/Number_*.csv
+TONES/Edge Impulse formatted data/
+TONES/hubert_models/
+
+# Large binaries / archives (use local installs; GitHub 100MB file limit)
+TONES/ffmpeg.exe
+TONES/sononym.db
+TONES/*.zip
+TONES/*.ZIP
+
+# Audio / ML artifacts (large)
+*.wav
+*.opus
+*.waptt
+*.pkl
+*.pt
+*.pth
+*.h5
+*.onnx
+
+# Feature extraction cache (regenerated; can be large)
+TONES/.cache/
+**/.cache/
+
+# Runtime outputs & research logs (regenerate locally)
+TONES/output/
+**/output/autoresearch/*.log
+**/output/autoresearch/*.err.log
+**/output/autoresearch/loop.pid
+**/output/autoresearch/eval_cache.json
+**/output/autoresearch/status.json
+**/output/autoresearch/autonomous_runs*.tsv
+**/output/autoresearch/*.schema_mismatch_backup_*.tsv
+**/output/autoresearch/evolution_snapshots/
+monitor_snapshots/
+*.log
+
+# Nested repo backups (see README if you restored history)
+.git_repo_backup/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Claude
+.claude/
