@@ -27,8 +27,14 @@ Thumbs.db
 .DS_Store
 desktop.ini
 
+# Entire TONES folder (too large for GitHub; work locally)
+TONES/
+
+# Screenshots
+*.png
+
 # Participant CGM / voice data (sensitive — do not publish without consent)
-TONES/Alvar/
+# TONES/Alvar/
 TONES/Anja/
 TONES/Bruno/
 TONES/Christian_L/
