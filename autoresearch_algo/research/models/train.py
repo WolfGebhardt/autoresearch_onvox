@@ -37,8 +37,6 @@ from sklearn.ensemble import (
 )
 from sklearn.svm import SVR, SVC
 from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
-from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import RBF, WhiteKernel
 from sklearn.model_selection import (
     cross_val_predict,
     LeaveOneOut,
@@ -113,14 +111,6 @@ def get_model(name: str, params: Optional[Dict] = None):
             max_depth=params.get("max_depth", None),
             random_state=params.get("random_state", 42),
         ),
-        # Simplified physics-style GP: RBF + noise. Use only where train size is capped (personal CV).
-        "PhysicsGP": lambda: GaussianProcessRegressor(
-            kernel=RBF(length_scale=1.0, length_scale_bounds=(1e-2, 10.0))
-            + WhiteKernel(noise_level=1.0, noise_level_bounds=(1e-5, 1e2)),
-            normalize_y=True,
-            n_restarts_optimizer=1,
-            random_state=42,
-        ),
     }
 
     if name not in registry:
@@ -143,7 +133,7 @@ def _build_pipeline(model) -> Pipeline:
 
 def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
     """Compute standard regression metrics."""
-    from tones.evaluation.metrics import clarke_error_grid, clarke_zone_percentages
+    from research.evaluation.metrics import clarke_error_grid, clarke_zone_percentages
 
     mae = mean_absolute_error(y_true, y_pred)
     rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
@@ -191,33 +181,6 @@ def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
         "clarke_d_pct": float(zones_pct.get("D", 0.0)),
         "clarke_e_pct": float(zones_pct.get("E", 0.0)),
     }
-
-
-def permutation_p_value_pearson(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
-    n_perm: int = 400,
-    rng: Optional[np.random.Generator] = None,
-) -> float:
-    """Two-sided permutation p-value for |Pearson r| (shuffle y_true vs fixed y_pred)."""
-    y_true = np.asarray(y_true, dtype=float)
-    y_pred = np.asarray(y_pred, dtype=float)
-    mask = np.isfinite(y_true) & np.isfinite(y_pred)
-    y_true = y_true[mask]
-    y_pred = y_pred[mask]
-    n = len(y_true)
-    if n < 5 or n_perm < 1:
-        return 1.0
-    r_obs, _ = stats.pearsonr(y_true, y_pred)
-    r_obs = float(r_obs)
-    rng = rng or np.random.default_rng(42)
-    count = 0
-    for _ in range(n_perm):
-        y_shuf = rng.permutation(y_true)
-        rp, _ = stats.pearsonr(y_shuf, y_pred)
-        if abs(float(rp)) >= abs(r_obs):
-            count += 1
-    return (1.0 + count) / (1.0 + float(n_perm))
 
 
 # =============================================================================
@@ -759,8 +722,8 @@ def train_personalized_temporal(
     """
     Train and evaluate a personalized model using chronological split.
 
-    Re-exports tones.evaluation.temporal_cv.train_personalized_temporal.
+    Re-exports research.evaluation.temporal_cv.train_personalized_temporal.
     Use this for honest time-series evaluation (no temporal leakage).
     """
-    from tones.evaluation.temporal_cv import train_personalized_temporal as _temporal
+    from research.evaluation.temporal_cv import train_personalized_temporal as _temporal
     return _temporal(X, y, timestamps, model, train_fraction)

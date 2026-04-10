@@ -1,47 +1,57 @@
-# AutoResearch_WHG
+# ONVOX AutoResearch
 
-TONES voice→glucose research workspace: autonomous LLM-driven experiment loop, hyperparameter sweep, and monitoring tools.
+Autonomous LLM-driven experiment loop for voice-glucose research: hyperparameter sweep, personal-focused optimization, and monitoring tools.
 
 ## Layout
 
-- **`TONES/`** — Primary application code (`hyperparameter_sweep.py`, `tones/`, `autoresearch/`).
-- **`autoresearch_algo/`** — Mirrored task scripts and docs for portability.
+- **`autoresearch_algo/`** — Core code: autonomous loop, research framework, production bridge, monitoring.
+  - `autoresearch/` — Autonomous LLM loop + monitors
+  - `research/` — Research framework (config, data loaders, features, evaluation, models)
+  - `onvox_bridge/` — Production integration (Supabase sync, promotion gates)
+  - `hyperparameter_sweep.py` — Systematic sweep across model/feature/normalization space
 - **`memory from onvox/`** — Project memory / rationale notes.
 
 ## Quick start (autonomous loop)
 
-From `TONES/autoresearch/`:
+From `autoresearch_algo/autoresearch/`:
+
+```bash
+python autonomous_llm_loop.py --optimizer-mode v2
+```
+
+Or on Windows:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\start_tones_autonomous.ps1 -Background
+powershell -ExecutionPolicy Bypass -File .\start_autonomous.ps1 -Background
 ```
 
 GUI monitor:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\start_tones_autonomous.ps1 -GuiMonitor
+powershell -ExecutionPolicy Bypass -File .\start_autonomous.ps1 -GuiMonitor
 ```
 
-See `TONES/autoresearch/RESEARCH_PLAN_AND_STATUS.md` for methodology and status.
+## Optimization Objective
 
-## Git note
+The loop uses a personal-focused scoring formula:
 
-If this tree was created from repos that had their own `.git` folders, those were renamed to `.git_repo_backup/` at convert time so a single top-level repository could track everything. Remove the backup folders locally when you no longer need the old history.
+```
+selection_score = balance - pers_r_bonus + temporal_penalty + signal_gate_penalty + temp_r_penalty
 
-**Participant CGM/voice folders under `TONES/` are gitignored** (sensitive). Keep data only on your machine; clone the repo elsewhere and restore `config.yaml` paths to your local data layout.
-
-### Push to GitHub
-
-1. Create a **new** repository on GitHub (HTTPS). A **private** repo is recommended.
-2. In this directory:
-
-```powershell
-git remote add origin https://github.com/YOUR_USER/YOUR_REPO.git
-git push -u origin main
+where:
+  balance        = 0.85 * pers_mae + 0.15 * pop_mae
+  pers_r_bonus   = max(0, pers_r - 0.1) * 3.0
+  temporal_penalty = max(0, temp_mae - pers_mae)
+  signal_gate_penalty = max(0, 0.30 - pass_rate) * 3.0
+  temp_r_penalty = max(0, 0.05 - temp_r) * 2.0
 ```
 
-Use a [personal access token](https://github.com/settings/tokens) as the password if prompted for HTTPS, or configure SSH and use `git@github.com:YOUR_USER/YOUR_REPO.git`.
+Population MAE is down-weighted to 15% because 22 research stages confirmed no population-level voice-glucose signal exists (r=-0.098). The product is personal adaptation.
 
 ## Requirements
 
-Python 3.11+, local [Ollama](https://ollama.com) for LLM proposals, and TONES `config.yaml` / data paths as documented in the TONES project.
+Python 3.11+, local [Ollama](https://ollama.com) for LLM proposals, and `config.yaml` / data paths as documented in the project.
+
+## Data note
+
+Participant CGM/voice folders are gitignored (sensitive). Keep data only on your machine; update `config.yaml` paths to your local data layout.

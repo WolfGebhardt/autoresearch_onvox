@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Monitor TONES autonomous loop progress/status."""
+"""Monitor ONVOX autonomous loop progress/status."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ import argparse
 import csv
 import json
 import math
-import msvcrt
 import os
+import select
 import shutil
 import sys
 import time
@@ -17,10 +17,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-TONES_ROOT = Path(__file__).resolve().parent.parent
-STATUS_DEFAULT = TONES_ROOT / "output" / "autoresearch" / "status.json"
-TSV_DEFAULT = TONES_ROOT / "output" / "autoresearch" / "autonomous_runs.tsv"
-LAUNCHER_PATH = TONES_ROOT / "autoresearch" / "start_tones_autonomous.ps1"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+STATUS_DEFAULT = PROJECT_ROOT / "output" / "autoresearch" / "status.json"
+TSV_DEFAULT = PROJECT_ROOT / "output" / "autoresearch" / "autonomous_runs.tsv"
+LAUNCHER_PATH = PROJECT_ROOT.parent.parent / "scripts" / "launch_autoresearch.sh"
 SPARK_CHARS = " .:-=+*#%@"
 
 
@@ -320,10 +320,12 @@ def _recent_rationale_usage(
 
 def _restart_hint() -> str:
     launcher = str(LAUNCHER_PATH)
-    return (
-        f'powershell -ExecutionPolicy Bypass -File "{launcher}" -Stop; '
-        f'powershell -ExecutionPolicy Bypass -File "{launcher}" -Background'
-    )
+    if os.name == "nt":
+        return (
+            f'powershell -ExecutionPolicy Bypass -File "{launcher}" -Stop; '
+            f'powershell -ExecutionPolicy Bypass -File "{launcher}" -Background'
+        )
+    return f'bash "{launcher}"'
 
 
 def _metric_delta(values: List[float], lower_is_better: bool) -> Dict[str, Optional[float]]:
@@ -349,15 +351,25 @@ def _delta_text(stats: Dict[str, Optional[float]]) -> str:
 
 
 def _read_key_nonblocking() -> str:
-    if os.name != "nt":
+    """Read a keypress without blocking, cross-platform."""
+    if os.name == "nt":
+        try:
+            import msvcrt
+            if msvcrt.kbhit():
+                ch = msvcrt.getwch()
+                return ch.lower()
+        except Exception:
+            return ""
         return ""
-    try:
-        if msvcrt.kbhit():
-            ch = msvcrt.getwch()
-            return ch.lower()
-    except Exception:
+    else:
+        # Unix/macOS: use select on stdin
+        try:
+            if sys.stdin.isatty() and select.select([sys.stdin], [], [], 0.0)[0]:
+                ch = sys.stdin.read(1)
+                return ch.lower()
+        except Exception:
+            return ""
         return ""
-    return ""
 
 
 def pid_alive(pid_value) -> bool:
@@ -449,7 +461,7 @@ def print_snapshot(
     s_20 = summarize(recent_20)
     last = status.get("last_result") or (eval_rows[-1] if eval_rows else {})
     print(colorize("=" * width, "cyan"))
-    print(colorize("TONES Autonomous Monitor (Advanced)", "bold"))
+    print(colorize("ONVOX Autonomous Monitor (Advanced)", "bold"))
     running = bool(status.get("running", False))
     pid = status.get("pid", "-")
     alive = pid_alive(pid)
@@ -650,7 +662,7 @@ def print_snapshot(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Monitor TONES autonomous loop progress.")
+    parser = argparse.ArgumentParser(description="Monitor ONVOX autonomous loop progress.")
     parser.add_argument("--status-file", default=str(STATUS_DEFAULT))
     parser.add_argument("--tsv-file", default=str(TSV_DEFAULT))
     parser.add_argument("--watch", action="store_true", help="Continuously refresh output.")

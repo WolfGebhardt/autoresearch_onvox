@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Autonomous TONES experiment loop driven by a local Ollama LLM.
+Autonomous ONVOX experiment loop driven by a local Ollama LLM.
 
 This script proposes one experiment at a time, evaluates it against
 matched CGM-voice pairs, logs results, and keeps iterating.
@@ -10,18 +10,15 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import json
 import math
 import os
 import subprocess
 import sys
-import threading
 import time
 import urllib.error
 import urllib.request
 import numpy as np
-from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait
 from itertools import product
 from dataclasses import dataclass
@@ -30,36 +27,51 @@ from pathlib import Path
 from statistics import mean
 from typing import Dict, List, Optional, Tuple
 
-# TONES root = parent of this file's directory
-TONES_ROOT = Path(__file__).resolve().parent.parent
-if str(TONES_ROOT) not in sys.path:
-    sys.path.insert(0, str(TONES_ROOT))
+# Project root = parent of this file's directory
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-from tones.config import load_config  # type: ignore
+from research.config import load_config  # type: ignore
 from hyperparameter_sweep import (  # type: ignore
     FEATURE_COMBOS,
     MODEL_NAMES,
+    PRODUCTION_FEATURE_SUBSETS,
     extract_features_config,
     evaluate_personalized,
     evaluate_population,
     evaluate_temporal,
+    evaluate_production,
     load_all_audio,
 )
+
+# Production data loader (optional — runs if synced data exists)
+try:
+    from onvox_bridge.production_data_loader import load_production_data
+    HAS_PRODUCTION_LOADER = True
+except ImportError:
+    HAS_PRODUCTION_LOADER = False
+
+# Promotion gate (optional — queues passing configs)
+try:
+    from onvox_bridge.promotion_gate import check_and_queue_result
+    HAS_PROMOTION_GATE = True
+except ImportError:
+    HAS_PROMOTION_GATE = False
 
 
 NORM_METHODS = ["none", "zscore", "rank"]
 N_MFCC_OPTIONS = [8, 13, 20, 30, 40]
-# Finer positive lags for CGM–voice alignment experiments (strategy: neighbor grid near sweet spots).
-CGM_LAG_OPTIONS_MIN = [-15, -5, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 60]
+CGM_LAG_OPTIONS_MIN = [-15, -5, 0, 5, 10, 15, 20, 30]
 ONVOX_PRIOR_MODELS = {"Ridge", "BayesianRidge", "SVR"}
 ONVOX_PRIOR_FEATURES = {
     "mfcc+spectral",
     "mfcc+spectral+pitch",
     "mfcc+spectral+pitch+temporal",
-    "personal_10",
 }
 ONVOX_PRIOR_MFCC = {13, 20}
 DEFAULT_MODEL_PREF = [
+    "deepseek-r1:14b",
     "qwen2.5-coder:7b",
     "llama3.1:8b",
     "llama3.1:latest",
@@ -67,53 +79,10 @@ DEFAULT_MODEL_PREF = [
     "deepseek-r1:7b",
     "phi4:latest",
 ]
-SOURCE_NAMES = {
-    "llm",
-    "neighbor",
-    "tight_neighbor",
-    "wild",
-    "underexplored",
-    "fallback",
-    "diversity",
-}
+SOURCE_NAMES = {"llm", "neighbor", "underexplored", "fallback", "diversity"}
 MIN_LLM_PER_BATCH = 1
 MIN_DIVERSITY_PER_BATCH = 1
-# Exploit top keep rows: small perturbations of lag / mfcc / norm / linear model / feature family.
-MIN_TIGHT_NEIGHBOR_PER_BATCH = 2
-# Novel high-variance configs (nonlinear models, rare bundles); may bypass cycle policy when needed.
-MIN_WILD_PER_BATCH = 1
 MAX_SOURCE_FRAC = 0.60
-
-# Perturb lags only when the sum is still an allowed CGM lag option.
-TIGHT_LAG_DELTAS = (-10, -5, 5, 10)
-# Prefer these for "wild" exploratory slots (innovation / distance from typical Ridge keeps).
-WILD_MODEL_BIAS = (
-    "PhysicsGP",
-    "ExtraTrees",
-    "GradientBoosting",
-    "SVR",
-    "KNN",
-    "Huber",
-    "RandomForest",
-    "Lasso",
-    "ElasticNet",
-)
-WILD_FEATURE_BIAS = (
-    "all_features",
-    "personal_10",
-    "mfcc_only",
-    "mfcc+spectral+pitch+temporal",
-    "mfcc+spectral+pitch+vq",
-    "mfcc+spectral+pitch",
-)
-
-# Bump when feature extraction / lag logic changes so caches stay valid.
-FEATURE_EXTRACT_CACHE_VERSION = "3"
-EVAL_CACHE_SCHEMA = 4
-FEATURE_CACHE_MAX_ENTRIES = 32
-_feature_cache_lock = threading.Lock()
-_feature_extract_cache: "OrderedDict[tuple, Dict[str, Dict]]" = OrderedDict()
-
 LOG_FIELDS = [
     "timestamp",
     "cycle",
@@ -140,13 +109,11 @@ LOG_FIELDS = [
     "temp_bias",
     "signal_gate_pass_rate",
     "signal_gate_penalty",
+    "pers_r_bonus",
     "balance",
     "selection_score",
     "temporal_penalty",
     "correlation_penalty",
-    "eval_phase",
-    "failure_tags",
-    "ab_tag",
     "participants",
     "notes",
 ]
@@ -193,11 +160,11 @@ class EvalResult:
     temp_bias: float
     signal_gate_pass_rate: float
     signal_gate_penalty: float
+    pers_r_bonus: float
     balance: float
     selection_score: float
     temporal_penalty: float
     correlation_penalty: float
-    eval_phase: str
     n_participants: int
     notes: str
 
@@ -227,7 +194,7 @@ def _flags_from_feature_key(feature_key: str) -> Dict[str, bool]:
 def _list_ollama_models() -> List[str]:
     proc = subprocess.run(
         ["ollama", "list"],
-        cwd=str(TONES_ROOT),
+        cwd=str(PROJECT_ROOT),
         capture_output=True,
         text=True,
         check=False,
@@ -253,7 +220,7 @@ def pick_local_llm(preferred: Optional[str]) -> str:
     def _is_healthy(model_name: str) -> bool:
         proc = subprocess.run(
             ["ollama", "show", model_name],
-            cwd=str(TONES_ROOT),
+            cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
             check=False,
@@ -286,22 +253,8 @@ def pick_local_llm(preferred: Optional[str]) -> str:
     raise RuntimeError("No healthy local Ollama model found. Try re-pulling one model.")
 
 
-_OLLAMA_HTTP: Dict[str, float] = {
-    "timeout_sec": 300.0,
-    "retries": 3.0,
-    "retry_sleep_sec": 2.0,
-}
-
-
-def configure_ollama_http(timeout_sec: int, retries: int, retry_sleep_sec: float) -> None:
-    """Set HTTP behavior for `call_ollama_chat` (called from main after argparse)."""
-    _OLLAMA_HTTP["timeout_sec"] = float(max(30, timeout_sec))
-    _OLLAMA_HTTP["retries"] = float(max(1, retries))
-    _OLLAMA_HTTP["retry_sleep_sec"] = float(max(0.5, retry_sleep_sec))
-
-
 def call_ollama_chat(
-    model: str, prompt: str, timeout_sec: Optional[int] = None, schema: Optional[Dict] = None
+    model: str, prompt: str, timeout_sec: int = 120, schema: Optional[Dict] = None
 ) -> str:
     payload = {
         "model": model,
@@ -326,38 +279,22 @@ def call_ollama_chat(
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    t = float(timeout_sec) if timeout_sec is not None else _OLLAMA_HTTP["timeout_sec"]
-    retries = int(_OLLAMA_HTTP["retries"])
-    sleep_s = float(_OLLAMA_HTTP["retry_sleep_sec"])
-    last_err: Optional[BaseException] = None
-    body: Optional[str] = None
-    for attempt in range(retries):
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            body = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        err_body = ""
         try:
-            with urllib.request.urlopen(req, timeout=t) as resp:
-                body = resp.read().decode("utf-8")
-            break
-        except urllib.error.HTTPError as exc:
-            err_body = ""
-            try:
-                err_body = exc.read().decode("utf-8")
-            except Exception:
-                pass
-            raise RuntimeError(
-                f"Ollama returned HTTP {exc.code}. Body: {err_body[:600]}"
-            ) from exc
-        except (TimeoutError, OSError, urllib.error.URLError) as exc:
-            last_err = exc
-            if attempt + 1 >= retries:
-                break
-            time.sleep(sleep_s)
-    if body is None:
-        if isinstance(last_err, urllib.error.URLError):
-            raise RuntimeError(
-                "Could not reach Ollama at http://127.0.0.1:11434. Is 'ollama serve' running?"
-            ) from last_err
+            err_body = exc.read().decode("utf-8")
+        except Exception:
+            pass
         raise RuntimeError(
-            f"Ollama request failed after {retries} attempt(s) (timeout or connection error). Last: {last_err!r}"
-        ) from last_err
+            f"Ollama returned HTTP {exc.code}. Body: {err_body[:600]}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            "Could not reach Ollama at http://127.0.0.1:11434. Is 'ollama serve' running?"
+        ) from exc
     data = json.loads(body)
     return data["message"]["content"]
 
@@ -447,108 +384,13 @@ def _best_rows(history: List[Dict[str, str]], top_n: int = 5) -> List[Dict[str, 
         if row.get("status") != "keep":
             continue
         try:
-            sc = float(row.get("selection_score", row.get("balance", "nan")))
-            if math.isfinite(sc):
-                keep_rows.append((sc, row))
+            bal = float(row.get("balance", "nan"))
+            if math.isfinite(bal):
+                keep_rows.append((bal, row))
         except ValueError:
             continue
     keep_rows.sort(key=lambda x: x[0])
     return [r for _, r in keep_rows[:top_n]]
-
-
-def _tight_neighbor_candidates_from_best(
-    history: List[Dict[str, str]], tried_keys: set
-) -> List[Tuple[str, str, int, str, str, int]]:
-    """Small, practical perturbations around top ``keep`` rows (sweet-spot exploitation).
-
-    Varies lag (small deltas), adjacent ``n_mfcc`` on the grid, all norms, Ridge↔BayesianRidge,
-    and a short list of nearby feature bundles — not the full Cartesian one-hop space.
-    """
-    lag_allowed = set(CGM_LAG_OPTIONS_MIN)
-    mfcc_order = list(N_MFCC_OPTIONS)
-    out: List[Tuple[str, str, int, str, str, int]] = []
-
-    def _feat_tight_variants(base_feat: str) -> List[str]:
-        v = [base_feat]
-        if base_feat == "mfcc+spectral+pitch":
-            for x in (
-                "mfcc+spectral+pitch+vq",
-                "mfcc+spectral+pitch+temporal",
-                "mfcc+spectral",
-            ):
-                if x in FEATURE_COMBOS and x not in v:
-                    v.append(x)
-        elif base_feat == "mfcc+spectral+pitch+vq":
-            for x in ("mfcc+spectral+pitch", "mfcc+spectral+pitch+temporal"):
-                if x in FEATURE_COMBOS and x not in v:
-                    v.append(x)
-        elif base_feat == "mfcc+spectral":
-            for x in ("mfcc+spectral+pitch", "mfcc+spectral+pitch+vq"):
-                if x in FEATURE_COMBOS and x not in v:
-                    v.append(x)
-        return v
-
-    for row in _best_rows(history, top_n=5):
-        try:
-            base_model = str(row["model_name"])
-            base_mfcc = int(float(row["n_mfcc"]))
-            base_feat = str(row["feature_key"])
-            base_norm = str(row["normalization"])
-            base_lag = int(float(row.get("cgm_lag_min", "0")))
-        except Exception:
-            continue
-
-        mfcc_opts = {base_mfcc}
-        if base_mfcc in mfcc_order:
-            i = mfcc_order.index(base_mfcc)
-            if i > 0:
-                mfcc_opts.add(mfcc_order[i - 1])
-            if i + 1 < len(mfcc_order):
-                mfcc_opts.add(mfcc_order[i + 1])
-
-        lag_opts = {base_lag}
-        for d in TIGHT_LAG_DELTAS:
-            cand = base_lag + d
-            if cand in lag_allowed:
-                lag_opts.add(cand)
-
-        model_opts = [base_model]
-        if base_model in ("Ridge", "BayesianRidge"):
-            for m in ("Ridge", "BayesianRidge"):
-                if m != base_model and m in MODEL_NAMES:
-                    model_opts.append(m)
-
-        feat_opts = _feat_tight_variants(base_feat)
-
-        for model_name in model_opts:
-            for n_mfcc in sorted(mfcc_opts):
-                for normalization in NORM_METHODS:
-                    for feature_key in feat_opts:
-                        for cgm_lag_min in sorted(lag_opts):
-                            exp_key = (
-                                f"{model_name}|{n_mfcc}|{feature_key}|{normalization}|lag{cgm_lag_min}"
-                            )
-                            if exp_key in tried_keys:
-                                continue
-                            out.append(
-                                (
-                                    exp_key,
-                                    model_name,
-                                    n_mfcc,
-                                    normalization,
-                                    feature_key,
-                                    cgm_lag_min,
-                                )
-                            )
-
-    seen = set()
-    deduped: List[Tuple[str, str, int, str, str, int]] = []
-    for t in out:
-        if t[0] in seen:
-            continue
-        seen.add(t[0])
-        deduped.append(t)
-    return deduped[:160]
 
 
 def _neighbor_candidates_from_best(
@@ -610,16 +452,8 @@ def _passes_onvox_cycle_policy(
     n_mfcc: int,
     feature_key: str,
     cgm_lag_min: int,
-    *,
-    policy_bypass: bool = False,
 ) -> bool:
-    """Apply ONVOX-informed cycle policy to improve early search efficiency.
-
-    Wild exploratory slots set ``policy_bypass=True`` so nonlinear / rare bundles
-    are still reachable during warm-up cycles.
-    """
-    if policy_bypass:
-        return True
+    """Apply ONVOX-informed cycle policy to improve early search efficiency."""
     if cycle <= 4:
         # Early: emphasize temporal priors and simpler robust models.
         return (
@@ -652,9 +486,6 @@ def _onvox_prior_bonus(
         bonus -= 0.3
     elif cgm_lag_min < 0:
         bonus += 0.1
-    # ONVOX research: full 103-style stacks overfit on small n; prefer compact sets.
-    if feature_key == "all_features":
-        bonus += 0.45
     return bonus
 
 
@@ -720,89 +551,6 @@ def _pick_diversity_candidate(
     )
 
 
-def _pick_wild_candidate(
-    tried: set, cycle: int, history: List[Dict[str, str]]
-) -> Optional[Candidate]:
-    """High-variance exploratory configs (novel models/bundles/lags); policy may bypass warm-up."""
-    keep_models: set = set()
-    keep_feats: set = set()
-    for r in history:
-        if r.get("status") != "keep":
-            continue
-        keep_models.add(str(r.get("model_name", "")))
-        keep_feats.add(str(r.get("feature_key", "")))
-
-    pool = [
-        c
-        for c in _all_candidate_configs()
-        if c[0] not in tried
-        and _passes_onvox_cycle_policy(
-            cycle, c[1], c[2], c[4], c[5], policy_bypass=True
-        )
-    ]
-    if not pool:
-        return None
-
-    scored: List[Tuple[float, Tuple[str, str, int, str, str, int]]] = []
-    for c in pool:
-        _, model_name, _, _, feature_key, cgm_lag_min = c
-        wild = 0.0
-        if model_name not in keep_models:
-            wild += 2.0
-        if model_name in WILD_MODEL_BIAS:
-            wild += 2.2
-        if feature_key not in keep_feats:
-            wild += 1.1
-        if feature_key in WILD_FEATURE_BIAS:
-            wild += 1.4
-        if cgm_lag_min < 0 or abs(cgm_lag_min) >= 20:
-            wild += 0.6
-        if _model_family(model_name) in {"tree", "kernel", "other"}:
-            wild += 0.8
-        scored.append((wild, c))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    span = min(48, max(1, len(scored)))
-    top = scored[:span]
-    _, pick = top[(cycle * 17 + 5) % len(top)]
-    exp_key, model_name, n_mfcc, normalization, feature_key, cgm_lag_min = pick
-    return Candidate(
-        source="wild",
-        model_name=model_name,
-        n_mfcc=n_mfcc,
-        cgm_lag_min=cgm_lag_min,
-        feature_key=feature_key,
-        normalization=normalization,
-        exp_key=exp_key,
-        rationale="guardrail_wild_explore",
-    )
-
-
-def _pick_tight_injection_candidate(
-    tried: set, cycle: int, history: List[Dict[str, str]]
-) -> Optional[Candidate]:
-    """Single tight neighbor for explicit batch floors (may overlap with choose_next path)."""
-    cands = [
-        n
-        for n in _tight_neighbor_candidates_from_best(history, tried)
-        if _passes_onvox_cycle_policy(cycle, n[1], n[2], n[4], n[5])
-    ]
-    if not cands:
-        return None
-    pick = cands[(cycle * 19 + 7) % len(cands)]
-    exp_key, model_name, n_mfcc, normalization, feature_key, cgm_lag_min = pick
-    return Candidate(
-        source="tight_neighbor",
-        model_name=model_name,
-        n_mfcc=n_mfcc,
-        cgm_lag_min=cgm_lag_min,
-        feature_key=feature_key,
-        normalization=normalization,
-        exp_key=exp_key,
-        rationale="guardrail_tight_sweet_spot",
-    )
-
-
 def _source_of_row(row: Dict[str, str]) -> str:
     src = str(row.get("source", "")).strip().lower()
     if src in SOURCE_NAMES:
@@ -812,10 +560,6 @@ def _source_of_row(row: Dict[str, str]) -> str:
         return "diversity"
     if "guardrail_neighbor_of_best_keep" in notes:
         return "neighbor"
-    if "guardrail_tight_sweet_spot" in notes:
-        return "tight_neighbor"
-    if "guardrail_wild_explore" in notes:
-        return "wild"
     if "guardrail_fallback_unseen_candidate" in notes:
         return "fallback"
     if "guardrail_underexplored_axes" in notes:
@@ -824,10 +568,10 @@ def _source_of_row(row: Dict[str, str]) -> str:
 
 
 def _propose_llm_candidate(
-    llm_model: str, tried: set, best_selection_score: Optional[float], cycle: int, history: List[Dict[str, str]]
+    llm_model: str, tried: set, best_balance: Optional[float], cycle: int, history: List[Dict[str, str]]
 ) -> Optional[Candidate]:
     for _ in range(5):
-        proposal, _ = propose_config(llm_model, tried, best_selection_score, cycle, history)
+        proposal, _ = propose_config(llm_model, tried, best_balance, cycle, history)
         proposal["source"] = "llm"
         try:
             source, model_name, n_mfcc, cgm_lag_min, normalization, packed = normalize_proposal(proposal)
@@ -854,15 +598,14 @@ def _propose_llm_candidate(
 def propose_config(
     llm_model: str,
     tried_keys: set,
-    best_selection_score: Optional[float],
+    best_balance: Optional[float],
     cycle: int,
-    history: List[Dict[str, str]],
+    recent_rows: List[Dict[str, str]],
 ) -> Tuple[Dict, str]:
-    recent_json = json.dumps(history[-8:], indent=2)
+    recent_json = json.dumps(recent_rows[-8:], indent=2)
     tried_preview = sorted(list(tried_keys))[-20:]
-    synthesis = _research_synthesis_block(history)
     prompt = f"""
-Design the next glucose-estimation experiment for TONES.
+Design the next glucose-estimation experiment for ONVOX AutoResearch.
 
 Allowed values:
 - n_mfcc: {N_MFCC_OPTIONS}
@@ -872,36 +615,24 @@ Allowed values:
 - feature_key: one of {list(FEATURE_COMBOS.keys())}
 
 Current cycle: {cycle}
-Best selection_score so far (lower is better): {best_selection_score}
+Best selection score so far (lower is better): {best_balance}
 Recently evaluated rows:
 {recent_json}
-
-Research synthesis (failure tags + lag coverage; use to avoid repeating dead ends and to propose novel axes):
-{synthesis}
 
 Already tried experiment keys (avoid duplicates):
 {tried_preview}
 
-Priors from ONVOX memory + ML research (22+ stages):
-- Population LOSO often shows weak/negative r on voice-only; trustworthy gains are usually
-  PERSONAL (per-user) and TIME-ORDERED validation — do not chase population r alone.
-- Search strategy: combine TIGHT moves around the best-known ``keep`` configs (same feature family,
-  small lag/mfcc/norm tweaks, Ridge/BayesianRidge) with WILD experiments (different model families,
-  PhysicsGP, all_features, personal_10, extreme lags) — both are intentionally run each batch.
-- Signal gate (routing heuristic): per participant r>0.3 AND >10% relative MAE improvement
-  vs mean baseline AND permutation p<0.05 on OOF preds — rare at population level; common failure tags: low_pop_r.
-- Favor compact features: mfcc+spectral (+pitch / +temporal / +vq) over "all_features"
-  unless evidence says otherwise (high-dim hurt on small cohorts in production research).
-- Dead ends (do not prioritize): VAD stripping, pitch/time augmentation, CGM rate-of-change
-  as input (label leakage at inference), shuffled CV as "honest" eval, raw energy as proxy
-  for level (device-dependent), contrastive/embeddings without strict LOSO.
-- What worked elsewhere: strong personal linear/GP tracks, physics-informed length scales,
-  temporal priors (time-of-day), quality weighting — here we only have sklearn models;
-  prefer Ridge/BayesianRidge and honest temporal metrics.
+Priors from ONVOX memory:
+- CRITICAL: There is NO population-level voice-glucose signal (r=-0.098).
+  Optimize for PERSONAL model accuracy (pers_mae, pers_r).
+- The scoring formula is: 0.85*pers_mae + 0.15*pop_mae - pers_r_bonus + penalties.
+  Lowering pers_mae and raising pers_r are the primary levers.
 - Early calibration tends to work best with Ridge/BayesianRidge.
-- Strong defaults: n_mfcc in [13, 20] and feature_key in
+- Temporal context is especially important in very early cycles.
+- Strong practical defaults: n_mfcc in [13, 20] and feature_key in
   ["mfcc+spectral", "mfcc+spectral+pitch", "mfcc+spectral+pitch+temporal"].
-- Explore CGM lag; prefer positive lags (+5..+20 min) with controls.
+- Explore CGM lag because interstitial CGM can lag blood; voice might lead CGM.
+- Prefer positive lag hypotheses (e.g., +5 to +20 min), but still test controls.
 
 Return JSON only with keys:
 {{
@@ -944,17 +675,15 @@ def normalize_proposal(data: Dict) -> Tuple[str, str, int, int, str, str]:
 def choose_next_candidate(
     llm_model: str,
     tried: set,
-    best_selection_score: Optional[float],
+    best_balance: Optional[float],
     cycle: int,
     history: List[Dict[str, str]],
 ) -> Tuple[Dict, str]:
     """Guardrailed candidate chooser:
     1) Enforce exploration balance (normalization, feature families)
-    2) Tight neighbors around best ``keep`` rows, then wider one-hop neighbors
-    3) LLM proposal
+    2) Explore neighbors around best-known configurations
+    3) Use LLM proposal
     4) Deterministic unseen fallback
-
-    Batched mode also enforces minimum ``tight_neighbor`` and ``wild`` slots per batch.
     """
     ok_rows = [r for r in history if r.get("status") in ("keep", "discard")]
 
@@ -987,44 +716,31 @@ def choose_next_candidate(
                 exp_key,
             )
 
-    # 2) Exploit around best known configs: tight sweet-spot moves first, then wide one-hop.
-    tight = [
-        n
-        for n in _tight_neighbor_candidates_from_best(history, tried)
-        if _passes_onvox_cycle_policy(cycle, n[1], n[2], n[4], n[5])
+    # 2) Exploit around best known configs.
+    neighbors = _neighbor_candidates_from_best(history, tried)
+    neighbors = [
+        n for n in neighbors if _passes_onvox_cycle_policy(cycle, n[1], n[2], n[4], n[5])
     ]
-    wide = [
-        n
-        for n in _neighbor_candidates_from_best(history, tried)
-        if _passes_onvox_cycle_policy(cycle, n[1], n[2], n[4], n[5])
-    ]
-    tight_keys = {n[0] for n in tight}
-    merged: List[Tuple[Tuple[str, str, int, str, str, int], bool]] = [
-        (n, True) for n in tight
-    ] + [(n, False) for n in wide if n[0] not in tight_keys]
-    if merged:
-        pick, is_tight = merged[(cycle - 1) % len(merged)]
-        exp_key, model_name, n_mfcc, normalization, feature_key, cgm_lag_min = pick
+    if neighbors:
+        exp_key, model_name, n_mfcc, normalization, feature_key, cgm_lag_min = neighbors[
+            (cycle - 1) % len(neighbors)
+        ]
         return (
             {
-                "source": "tight_neighbor" if is_tight else "neighbor",
+                "source": "neighbor",
                 "model_name": model_name,
                 "n_mfcc": n_mfcc,
                 "cgm_lag_min": cgm_lag_min,
                 "normalization": normalization,
                 "feature_key": feature_key,
-                "rationale": (
-                    "guardrail_tight_sweet_spot"
-                    if is_tight
-                    else "guardrail_neighbor_of_best_keep"
-                ),
+                "rationale": "guardrail_neighbor_of_best_keep",
             },
             exp_key,
         )
 
     # 3) LLM proposal (with duplicate retries).
     for _ in range(4):
-        proposal, _ = propose_config(llm_model, tried, best_selection_score, cycle, history)
+        proposal, _ = propose_config(llm_model, tried, best_balance, cycle, history)
         source, model_name, n_mfcc, cgm_lag_min, normalization, packed = normalize_proposal(proposal)
         feature_key, exp_key = packed.split("|", 1)
         if exp_key not in tried and _passes_onvox_cycle_policy(
@@ -1060,7 +776,7 @@ def choose_next_candidate(
 def propose_candidate_batch(
     llm_model: str,
     tried: set,
-    best_selection_score: Optional[float],
+    best_balance: Optional[float],
     cycle_start: int,
     history: List[Dict[str, str]],
     batch_size: int,
@@ -1083,7 +799,7 @@ def propose_candidate_batch(
         proposal, exp_key = choose_next_candidate(
             llm_model=llm_model,
             tried=local_tried,
-            best_selection_score=best_selection_score,
+            best_balance=best_balance,
             cycle=cycle_start + i,
             history=history,
         )
@@ -1127,7 +843,7 @@ def propose_candidate_batch(
         llm_slot = _propose_llm_candidate(
             llm_model=llm_model,
             tried=local_tried,
-            best_selection_score=best_selection_score,
+            best_balance=best_balance,
             cycle=cycle_start + len(out),
             history=history,
         )
@@ -1136,48 +852,6 @@ def propose_candidate_batch(
                 if len(out) < target_batch:
                     out.append(llm_slot)
                     local_tried.add(llm_slot.exp_key)
-
-    # Floor: tight sweet-spot neighbors (small moves around top ``keep`` rows).
-    min_tight = max(1, min(MIN_TIGHT_NEIGHBOR_PER_BATCH, max(1, (target_batch + 2) // 4)))
-    for attempt in range(36):
-        if sum(1 for c in out if c.source == "tight_neighbor") >= min_tight:
-            break
-        cand = _pick_tight_injection_candidate(
-            local_tried, cycle_start + attempt + 1, history
-        )
-        if cand is None:
-            break
-        if cand.exp_key in local_tried:
-            continue
-        if not _replace_one(
-            ["fallback", "underexplored", "neighbor", "diversity", "llm"], cand
-        ):
-            if len(out) < target_batch:
-                out.append(cand)
-                local_tried.add(cand.exp_key)
-            else:
-                break
-
-    # Floor: wild / novel configs (nonlinear models, rare bundles; policy bypass in picker).
-    min_wild = max(1, min(MIN_WILD_PER_BATCH, max(1, target_batch // 8)))
-    for attempt in range(48):
-        if sum(1 for c in out if c.source == "wild") >= min_wild:
-            break
-        cand = _pick_wild_candidate(
-            local_tried, cycle_start + attempt + 200, history
-        )
-        if cand is None:
-            break
-        if cand.exp_key in local_tried:
-            continue
-        if not _replace_one(
-            ["fallback", "underexplored", "neighbor", "diversity", "llm"], cand
-        ):
-            if len(out) < target_batch:
-                out.append(cand)
-                local_tried.add(cand.exp_key)
-            else:
-                break
 
     # Cap source dominance to keep exploration/exploitation balanced.
     src_counts = {}
@@ -1193,7 +867,7 @@ def propose_candidate_batch(
                 replacement = _propose_llm_candidate(
                     llm_model=llm_model,
                     tried=local_tried,
-                    best_selection_score=best_selection_score,
+                    best_balance=best_balance,
                     cycle=cycle_start + len(out),
                     history=history,
                 )
@@ -1217,25 +891,20 @@ def evaluate_one(
     include_temporal: bool = True,
     early_stop_cutoff: Optional[float] = None,
     early_stop_margin: float = 0.0,
-    max_participants: Optional[int] = None,
-    eval_phase: str = "full",
 ) -> EvalResult:
-    fdata = get_cached_features(
-        participant_data,
-        cgm_lag_min=cgm_lag_min,
+    flags = _flags_from_feature_key(feature_key)
+    lagged_data = _apply_cgm_lag(participant_data, cgm_lag_min)
+    fdata = extract_features_config(
+        lagged_data,
         n_mfcc=n_mfcc,
-        feature_key=feature_key,
+        include_spectral=flags["include_spectral"],
+        include_pitch=flags["include_pitch"],
+        use_vq=flags["use_vq"],
+        use_temporal=flags["use_temporal"],
         normalization=normalization,
     )
     if not fdata:
         raise RuntimeError("Feature extraction returned no valid participant data.")
-
-    # Multi-fidelity: cheap stage uses first N participants (sorted keys) without changing features.
-    if max_participants is not None and len(fdata) >= 2:
-        cap = min(max(int(max_participants), 2), len(fdata))
-        if cap < len(fdata):
-            keys = sorted(fdata.keys())[:cap]
-            fdata = {k: fdata[k] for k in keys}
 
     p_res = evaluate_personalized(fdata, model_name, normalization_method=normalization)
     pop_res = evaluate_population(fdata, model_name, normalization_method=normalization)
@@ -1256,39 +925,32 @@ def evaluate_one(
     pop_mard = float(pop_res.get("mard", float("nan")))
     pop_clarke_ab_pct = float(pop_res.get("clarke_ab_pct", float("nan")))
     pop_bias = float(pop_res.get("bias", float("nan")))
-    # Weight personal MAE higher than population (ONVOX: population signal often weak).
-    balance = 0.65 * pers_mae + 0.35 * pop_mae
+    # Personal-focused balance: 85% personal, 15% population (population has no signal)
+    balance = 0.85 * pers_mae + 0.15 * pop_mae
 
-    # ONVOX signal gate (routing heuristic; not multiplicity-corrected across folds):
-    # per participant: r>0.3 AND improvement>10% AND permutation p<0.05 on OOF preds.
+    # Reward personal correlation (bonus = subtract from score, lower is better)
+    pers_r_bonus = max(0.0, pers_r - 0.1) * 3.0
+
+    # ONVOX signal gate: r>0.3 AND improvement>10% AND p<0.05 (per participant).
     gate_total = 0
     gate_pass = 0
     for v in p_res.values():
         gate_total += 1
-        p_perm = float(v.get("p_value_perm", 1.0))
         if (
             float(v.get("r", 0.0)) > 0.3
             and float(v.get("pct_improvement", 0.0)) > 10.0
-            and p_perm < 0.05
+            and float(v.get("p_value", 1.0)) < 0.05
         ):
             gate_pass += 1
     signal_gate_pass_rate = (gate_pass / gate_total) if gate_total else 0.0
     # Penalize low signal evidence; no penalty once >=30% participants pass gate.
     signal_gate_penalty = max(0.0, 0.30 - signal_gate_pass_rate) * 3.0
-    pop_r_penalty = max(0.0, 0.10 - pop_r) * 4.0
-    clarke_penalty = (
-        max(0.0, 95.0 - pop_clarke_ab_pct) * 0.05
-        if math.isfinite(pop_clarke_ab_pct)
-        else 0.5
-    )
 
     # Safe early-stop pruning:
-    # Minimum achievable selection_score if temporal_penalty and temp_r_penalty were zero:
-    # balance + pop_r_penalty + clarke_penalty + signal_gate_penalty.
-    # Compare that to the best kept score (early_stop_cutoff). Do not double-count clarke.
-    optimistic_lower_bound = (
-        balance + pop_r_penalty + clarke_penalty + signal_gate_penalty
-    )
+    # Use an optimistic lower bound (no temporal penalties) to decide whether
+    # this candidate can no longer beat the current keep threshold.
+    # Optimistic: assume best-case pers_r_bonus and no temporal/temp_r penalties.
+    optimistic_lower_bound = balance - pers_r_bonus + signal_gate_penalty
     should_early_stop = (
         include_temporal
         and early_stop_cutoff is not None
@@ -1302,7 +964,7 @@ def evaluate_one(
         temp_bias = float("nan")
         temporal_penalty = 0.0
         temp_r_penalty = 0.0
-        correlation_penalty = pop_r_penalty + clarke_penalty + signal_gate_penalty
+        correlation_penalty = temp_r_penalty + signal_gate_penalty
         selection_score = optimistic_lower_bound
         notes = "early_stop_no_temporal"
         return EvalResult(
@@ -1325,11 +987,11 @@ def evaluate_one(
             temp_bias=temp_bias,
             signal_gate_pass_rate=signal_gate_pass_rate,
             signal_gate_penalty=signal_gate_penalty,
+            pers_r_bonus=pers_r_bonus,
             balance=balance,
             selection_score=selection_score,
             temporal_penalty=temporal_penalty,
             correlation_penalty=correlation_penalty,
-            eval_phase=eval_phase,
             n_participants=len(p_res),
             notes=notes,
         )
@@ -1339,20 +1001,22 @@ def evaluate_one(
     temp_mard = mean([float(v.get("mard", 0.0)) for v in t_res.values()]) if t_res else float("nan")
     temp_bias = mean([float(v.get("bias", 0.0)) for v in t_res.values()]) if t_res else float("nan")
 
-    # Multi-objective selection score:
-    # - keep MAE balance as core target
-    # - penalize temporal leakage (temp_mae worse than CV balance)
-    # - penalize weak/negative correlation for population and temporal robustness
+    # Personal-focused selection score:
+    # - balance is 85% personal MAE + 15% population MAE
+    # - reward personal correlation (pers_r_bonus subtracted)
+    # - penalize temporal leakage (temp_mae worse than pers_mae)
+    # - penalize weak temporal correlation
+    # - penalize low signal gate pass rate
     temporal_penalty = (
-        max(0.0, temp_mae - balance) if (include_temporal and math.isfinite(temp_mae)) else 0.0
+        max(0.0, temp_mae - pers_mae) if (include_temporal and math.isfinite(temp_mae)) else 0.0
     )
     temp_r_penalty = (
         max(0.0, 0.05 - temp_r) * 2.0
         if (include_temporal and math.isfinite(temp_r))
         else 0.0
     )
-    correlation_penalty = pop_r_penalty + temp_r_penalty + clarke_penalty + signal_gate_penalty
-    selection_score = balance + temporal_penalty + correlation_penalty
+    correlation_penalty = temp_r_penalty + signal_gate_penalty
+    selection_score = balance - pers_r_bonus + temporal_penalty + correlation_penalty
 
     return EvalResult(
         model_name=model_name,
@@ -1374,14 +1038,157 @@ def evaluate_one(
         temp_bias=temp_bias,
         signal_gate_pass_rate=signal_gate_pass_rate,
         signal_gate_penalty=signal_gate_penalty,
+        pers_r_bonus=pers_r_bonus,
         balance=balance,
         selection_score=selection_score,
         temporal_penalty=temporal_penalty,
         correlation_penalty=correlation_penalty,
-        eval_phase=eval_phase,
         n_participants=len(p_res),
         notes="ok" if include_temporal else "stage1_fast",
     )
+
+
+# Feature combo -> closest production feature subset mapping
+_COMBO_TO_SUBSET = {
+    "mfcc_only": "mfcc_13",
+    "mfcc+spectral": "spectral_8",
+    "mfcc+spectral+pitch": "personal_10",
+    "mfcc+spectral+pitch+vq": "personal_14",
+    "mfcc+spectral+pitch+temporal": "personal_10_time",
+    "all_features": "full",
+}
+
+
+def evaluate_one_dual(
+    participant_data: Dict[str, Dict],
+    production_data: Optional[Dict[str, Dict]],
+    model_name: str,
+    n_mfcc: int,
+    cgm_lag_min: int,
+    normalization: str,
+    feature_key: str,
+    include_temporal: bool = True,
+    early_stop_cutoff: Optional[float] = None,
+    early_stop_margin: float = 0.0,
+) -> EvalResult:
+    """Dual-track evaluation: research audio (Track A) + production features (Track B).
+
+    Runs both tracks and combines scores. Track B uses the closest matching
+    production feature subset for the given feature_key.
+    """
+    # Track A: research audio (original evaluate_one)
+    result_a = evaluate_one(
+        participant_data=participant_data,
+        model_name=model_name,
+        n_mfcc=n_mfcc,
+        cgm_lag_min=cgm_lag_min,
+        normalization=normalization,
+        feature_key=feature_key,
+        include_temporal=include_temporal,
+        early_stop_cutoff=early_stop_cutoff,
+        early_stop_margin=early_stop_margin,
+    )
+
+    # Track B: production features (if available)
+    if not production_data or not HAS_PRODUCTION_LOADER:
+        return result_a
+
+    try:
+        feature_subset = _COMBO_TO_SUBSET.get(feature_key, "personal_10")
+        prod_results = evaluate_production(
+            production_data,
+            model_name=model_name,
+            feature_subset=feature_subset,
+            normalization_method=normalization,
+        )
+
+        if not prod_results:
+            return result_a
+
+        # Combine: average MAE across production users as a bonus signal
+        prod_mae = mean([v["mae"] for v in prod_results.values()])
+        prod_r = mean([v["r"] for v in prod_results.values()])
+
+        # Blended selection score: 60% research + 40% production
+        # (production is higher-quality data but fewer users)
+        blended_balance = 0.6 * result_a.balance + 0.4 * prod_mae
+        blended_score = 0.6 * result_a.selection_score + 0.4 * prod_mae
+
+        notes = (
+            f"{result_a.notes};prod_mae={prod_mae:.2f},prod_r={prod_r:.3f},"
+            f"prod_users={len(prod_results)}"
+        )
+
+        # Check promotion gate for production results
+        if HAS_PROMOTION_GATE:
+            for uid, metrics in prod_results.items():
+                config = {
+                    "model_name": model_name,
+                    "n_mfcc": n_mfcc,
+                    "feature_key": feature_key,
+                    "normalization": normalization,
+                }
+                check_and_queue_result(config, metrics)
+
+        return EvalResult(
+            model_name=result_a.model_name,
+            n_mfcc=result_a.n_mfcc,
+            cgm_lag_min=result_a.cgm_lag_min,
+            feature_key=result_a.feature_key,
+            normalization=result_a.normalization,
+            pers_mae=result_a.pers_mae,
+            pers_r=result_a.pers_r,
+            pop_mae=result_a.pop_mae,
+            pop_r=result_a.pop_r,
+            temp_mae=result_a.temp_mae,
+            temp_r=result_a.temp_r,
+            pers_mard=result_a.pers_mard,
+            pop_mard=result_a.pop_mard,
+            temp_mard=result_a.temp_mard,
+            pop_clarke_ab_pct=result_a.pop_clarke_ab_pct,
+            pop_bias=result_a.pop_bias,
+            temp_bias=result_a.temp_bias,
+            signal_gate_pass_rate=result_a.signal_gate_pass_rate,
+            signal_gate_penalty=result_a.signal_gate_penalty,
+            pers_r_bonus=result_a.pers_r_bonus,
+            balance=blended_balance,
+            selection_score=blended_score,
+            temporal_penalty=result_a.temporal_penalty,
+            correlation_penalty=result_a.correlation_penalty,
+            n_participants=result_a.n_participants,
+            notes=notes[:300],
+        )
+    except Exception as e:
+        # If production track fails, fall back to research-only
+        result_a_notes = f"{result_a.notes};prod_error={str(e)[:100]}"
+        return EvalResult(
+            model_name=result_a.model_name,
+            n_mfcc=result_a.n_mfcc,
+            cgm_lag_min=result_a.cgm_lag_min,
+            feature_key=result_a.feature_key,
+            normalization=result_a.normalization,
+            pers_mae=result_a.pers_mae,
+            pers_r=result_a.pers_r,
+            pop_mae=result_a.pop_mae,
+            pop_r=result_a.pop_r,
+            temp_mae=result_a.temp_mae,
+            temp_r=result_a.temp_r,
+            pers_mard=result_a.pers_mard,
+            pop_mard=result_a.pop_mard,
+            temp_mard=result_a.temp_mard,
+            pop_clarke_ab_pct=result_a.pop_clarke_ab_pct,
+            pop_bias=result_a.pop_bias,
+            temp_bias=result_a.temp_bias,
+            signal_gate_pass_rate=result_a.signal_gate_pass_rate,
+            signal_gate_penalty=result_a.signal_gate_penalty,
+            pers_r_bonus=result_a.pers_r_bonus,
+            balance=result_a.balance,
+            selection_score=result_a.selection_score,
+            temporal_penalty=result_a.temporal_penalty,
+            correlation_penalty=result_a.correlation_penalty,
+            n_participants=result_a.n_participants,
+            notes=result_a_notes[:300],
+        )
 
 
 def _safe_float(value: str, default: float = float("nan")) -> float:
@@ -1426,60 +1233,6 @@ def _apply_cgm_lag(
     return shifted
 
 
-def _fingerprint_participant_data(data: Dict[str, Dict]) -> str:
-    """Stable hash of raw cohort (paths + glucose) for feature-cache keys."""
-    h = hashlib.sha256()
-    for name in sorted(data.keys()):
-        p = data[name]
-        paths = p.get("audio_paths", [])
-        g = np.asarray(p.get("glucose", []), dtype=float)
-        h.update(name.encode("utf-8"))
-        h.update(str(len(paths)).encode("ascii", errors="replace"))
-        if g.size:
-            h.update(np.ascontiguousarray(g).tobytes())
-    return h.hexdigest()[:40]
-
-
-def get_cached_features(
-    participant_data: Dict[str, Dict],
-    cgm_lag_min: int,
-    n_mfcc: int,
-    feature_key: str,
-    normalization: str,
-) -> Dict[str, Dict]:
-    """Re-use feature matrices for identical (data, lag, mfcc, feature bundle, norm)."""
-    fp = _fingerprint_participant_data(participant_data)
-    key = (
-        FEATURE_EXTRACT_CACHE_VERSION,
-        fp,
-        cgm_lag_min,
-        n_mfcc,
-        feature_key,
-        normalization,
-    )
-    with _feature_cache_lock:
-        if key in _feature_extract_cache:
-            _feature_extract_cache.move_to_end(key)
-            return _feature_extract_cache[key]
-    flags = _flags_from_feature_key(feature_key)
-    lagged_data = _apply_cgm_lag(participant_data, cgm_lag_min)
-    fdata = extract_features_config(
-        lagged_data,
-        n_mfcc=n_mfcc,
-        include_spectral=flags["include_spectral"],
-        include_pitch=flags["include_pitch"],
-        use_vq=flags["use_vq"],
-        use_temporal=flags["use_temporal"],
-        normalization=normalization,
-        feature_key=feature_key,
-    )
-    with _feature_cache_lock:
-        _feature_extract_cache[key] = fdata
-        while len(_feature_extract_cache) > FEATURE_CACHE_MAX_ENTRIES:
-            _feature_extract_cache.popitem(last=False)
-    return fdata
-
-
 def default_row(cycle: int, llm_model: str) -> Dict[str, str]:
     return {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -1507,13 +1260,11 @@ def default_row(cycle: int, llm_model: str) -> Dict[str, str]:
         "temp_bias": "",
         "signal_gate_pass_rate": "",
         "signal_gate_penalty": "",
+        "pers_r_bonus": "",
         "balance": "",
         "selection_score": "",
         "temporal_penalty": "",
         "correlation_penalty": "",
-        "eval_phase": "",
-        "failure_tags": "",
-        "ab_tag": "",
         "participants": "",
         "notes": "",
     }
@@ -1527,10 +1278,8 @@ def row_from_eval(
     exp_key: str,
     result: EvalResult,
     notes: str,
-    ab_tag: str = "",
 ) -> Dict[str, str]:
     row = default_row(cycle=cycle, llm_model=llm_model)
-    ft = ",".join(failure_tags(result))
     row.update(
         {
             "status": status,
@@ -1555,13 +1304,11 @@ def row_from_eval(
             "temp_bias": f"{result.temp_bias:.4f}" if math.isfinite(result.temp_bias) else "",
             "signal_gate_pass_rate": f"{result.signal_gate_pass_rate:.4f}",
             "signal_gate_penalty": f"{result.signal_gate_penalty:.4f}",
+            "pers_r_bonus": f"{result.pers_r_bonus:.4f}",
             "balance": f"{result.balance:.4f}",
             "selection_score": f"{result.selection_score:.4f}",
             "temporal_penalty": f"{result.temporal_penalty:.4f}",
             "correlation_penalty": f"{result.correlation_penalty:.4f}",
-            "eval_phase": result.eval_phase,
-            "failure_tags": ft,
-            "ab_tag": ab_tag,
             "participants": str(result.n_participants),
             "notes": notes[:300],
         }
@@ -1574,23 +1321,8 @@ def load_cache(cache_path: Path) -> Dict[str, Dict[str, str]]:
         return {}
     try:
         data = json.loads(cache_path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return {}
-        ver = data.get("_eval_cache_schema", 1)
-        if ver != EVAL_CACHE_SCHEMA:
-            print(
-                f"[warn] eval_cache schema {ver} != {EVAL_CACHE_SCHEMA}; "
-                "ignoring disk cache (metrics or CV may have changed). Delete "
-                f"{cache_path.name} to silence this after an intentional upgrade."
-            )
-            return {}
-        out: Dict[str, Dict[str, str]] = {}
-        for k, v in data.items():
-            if str(k).startswith("_"):
-                continue
-            if isinstance(v, dict):
-                out[str(k)] = dict(v)
-        return out
+        if isinstance(data, dict):
+            return {str(k): dict(v) for k, v in data.items() if isinstance(v, dict)}
     except Exception:
         pass
     return {}
@@ -1598,8 +1330,7 @@ def load_cache(cache_path: Path) -> Dict[str, Dict[str, str]]:
 
 def save_cache(cache_path: Path, cache: Dict[str, Dict[str, str]]) -> None:
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"_eval_cache_schema": EVAL_CACHE_SCHEMA, **cache}
-    cache_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    cache_path.write_text(json.dumps(cache, indent=2), encoding="utf-8")
 
 
 def evalresult_from_row(row: Dict[str, str]) -> EvalResult:
@@ -1624,11 +1355,11 @@ def evalresult_from_row(row: Dict[str, str]) -> EvalResult:
         temp_bias=_safe_float(row.get("temp_bias", ""), float("nan")),
         signal_gate_pass_rate=_safe_float(row.get("signal_gate_pass_rate", ""), 0.0),
         signal_gate_penalty=_safe_float(row.get("signal_gate_penalty", ""), 0.0),
+        pers_r_bonus=_safe_float(row.get("pers_r_bonus", ""), 0.0),
         balance=_safe_float(row.get("balance", "")),
         selection_score=_safe_float(row.get("selection_score", "")),
         temporal_penalty=_safe_float(row.get("temporal_penalty", "")),
         correlation_penalty=_safe_float(row.get("correlation_penalty", "")),
-        eval_phase=str(row.get("eval_phase", "full") or "full"),
         n_participants=int(float(row.get("participants", "0"))),
         notes=str(row.get("notes", "")),
     )
@@ -1650,104 +1381,7 @@ def failure_tags(result: EvalResult) -> List[str]:
         tags.append("high_temporal_penalty")
     if result.correlation_penalty > 1.2:
         tags.append("high_correlation_penalty")
-    if result.feature_key == "all_features" and result.selection_score > 18.0:
-        tags.append("overfit_tail")
-    if result.cgm_lag_min in {25, 35, 40, 45, 60}:
-        tags.append("fine_lag_grid")
     return tags
-
-
-def _best_incumbent_row(history: List[Dict[str, str]]) -> Optional[Dict[str, str]]:
-    """Best selection_score among ``keep`` rows (for single-axis A/B tagging)."""
-    best: Optional[Dict[str, str]] = None
-    best_sc: Optional[float] = None
-    for r in history:
-        if r.get("status") != "keep":
-            continue
-        sc = _safe_float(str(r.get("selection_score", "")))
-        if not math.isfinite(sc):
-            continue
-        if best_sc is None or sc < best_sc:
-            best_sc = sc
-            best = r
-    return best
-
-
-def _ab_tag_for_candidate(
-    cand: Candidate, incumbent: Optional[Dict[str, str]]
-) -> str:
-    if not incumbent:
-        return ""
-    diffs: List[str] = []
-    if cand.model_name != str(incumbent.get("model_name", "")):
-        diffs.append("model_name")
-    if str(cand.n_mfcc) != str(incumbent.get("n_mfcc", "")).strip():
-        diffs.append("n_mfcc")
-    if str(cand.cgm_lag_min) != str(incumbent.get("cgm_lag_min", "")).strip():
-        diffs.append("cgm_lag_min")
-    if cand.feature_key != str(incumbent.get("feature_key", "")):
-        diffs.append("feature_key")
-    if cand.normalization != str(incumbent.get("normalization", "")):
-        diffs.append("normalization")
-    if len(diffs) == 1:
-        return f"ab:{diffs[0]}"
-    return ""
-
-
-def _ab_tag_from_parts(
-    model_name: str,
-    n_mfcc: int,
-    cgm_lag_min: int,
-    feature_key: str,
-    normalization: str,
-    incumbent: Optional[Dict[str, str]],
-) -> str:
-    if not incumbent:
-        return ""
-    c = Candidate(
-        source="llm",
-        model_name=model_name,
-        n_mfcc=n_mfcc,
-        cgm_lag_min=cgm_lag_min,
-        feature_key=feature_key,
-        normalization=normalization,
-        exp_key="_",
-        rationale="",
-    )
-    return _ab_tag_for_candidate(c, incumbent)
-
-
-def _research_synthesis_block(history: List[Dict[str, str]], window: int = 120) -> str:
-    """Failure-tag counts and lag coverage for LLM hypothesis generation."""
-    rows = [r for r in history[-window:] if r.get("status") in ("keep", "discard", "error")]
-    if not rows:
-        return "(no prior rows in window)"
-    tag_counts: Dict[str, int] = {}
-    for r in rows:
-        ft = str(r.get("failure_tags", "")).strip()
-        if not ft:
-            # Fallback: parse fail_tags= from legacy notes
-            notes = str(r.get("notes", ""))
-            if "fail_tags=" in notes:
-                part = notes.split("fail_tags=", 1)[-1].split(";", 1)[0].split(",")
-                for t in part:
-                    t = t.strip()
-                    if t:
-                        tag_counts[t] = tag_counts.get(t, 0) + 1
-            continue
-        for t in ft.split(","):
-            t = t.strip()
-            if t:
-                tag_counts[t] = tag_counts.get(t, 0) + 1
-    top_tags = sorted(tag_counts.items(), key=lambda x: -x[1])[:14]
-    lags = sorted(
-        {str(r.get("cgm_lag_min", "")) for r in rows if str(r.get("cgm_lag_min", ""))},
-        key=lambda x: int(x) if x.lstrip("-").isdigit() else 0,
-    )
-    return (
-        f"failure_tag_counts (approx, last {len(rows)} rows): {top_tags}\n"
-        f"cgm_lag_min values seen: {lags}"
-    )
 
 
 def stage1_heuristic_score(candidate: Candidate, history: List[Dict[str, str]]) -> float:
@@ -1905,8 +1539,8 @@ def write_json(path: Path, payload: Dict) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Autonomous local-LLM loop for TONES.")
-    parser.add_argument("--config", default=None, help="Path to TONES config.yaml")
+    parser = argparse.ArgumentParser(description="Autonomous local-LLM loop for ONVOX AutoResearch.")
+    parser.add_argument("--config", default=None, help="Path to ONVOX config.yaml")
     parser.add_argument(
         "--model",
         default=None,
@@ -1922,7 +1556,7 @@ def main() -> None:
         "--min-improvement",
         type=float,
         default=0.03,
-        help="Minimum improvement in selection_score (lower is better) required to mark a run as keep.",
+        help="Required balance improvement to mark as keep.",
     )
     parser.add_argument(
         "--sleep-seconds",
@@ -1954,13 +1588,13 @@ def main() -> None:
     parser.add_argument(
         "--parallel-workers",
         type=int,
-        default=5,
+        default=2,
         help="Parallel workers for staged/full evaluation in v2 mode.",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=10,
+        default=6,
         help="Number of proposed candidates per v2 iteration.",
     )
     parser.add_argument(
@@ -1972,7 +1606,7 @@ def main() -> None:
     parser.add_argument(
         "--stage1-top-k",
         type=int,
-        default=4,
+        default=2,
         help="Top stage1 candidates promoted to full evaluation in v2 mode.",
     )
     parser.add_argument(
@@ -1991,55 +1625,31 @@ def main() -> None:
         action="store_true",
         help="Disable safe early-stop pruning of temporal evaluation.",
     )
-    parser.add_argument(
-        "--ollama-timeout-sec",
-        type=int,
-        default=300,
-        help="HTTP timeout for each Ollama /api/chat request (default 300).",
-    )
-    parser.add_argument(
-        "--ollama-retries",
-        type=int,
-        default=3,
-        help="Retries on timeout or connection errors to Ollama (default 3).",
-    )
-    parser.add_argument(
-        "--ollama-retry-sleep-sec",
-        type=float,
-        default=2.0,
-        help="Seconds to wait between Ollama retries (default 2).",
-    )
     args = parser.parse_args()
-
-    configure_ollama_http(
-        args.ollama_timeout_sec,
-        args.ollama_retries,
-        args.ollama_retry_sleep_sec,
-    )
 
     llm_model = pick_local_llm(args.model)
     log_path = (
         Path(args.log_file)
         if args.log_file
-        else TONES_ROOT / "output" / "autoresearch" / "autonomous_runs_v2.tsv"
+        else PROJECT_ROOT / "output" / "autoresearch" / "autonomous_runs_v2.tsv"
     )
     status_path = (
         Path(args.status_file)
         if args.status_file
-        else TONES_ROOT / "output" / "autoresearch" / "status.json"
+        else PROJECT_ROOT / "output" / "autoresearch" / "status.json"
     )
     pid_path = (
         Path(args.pid_file)
         if args.pid_file
-        else TONES_ROOT / "output" / "autoresearch" / "loop.pid"
+        else PROJECT_ROOT / "output" / "autoresearch" / "loop.pid"
     )
     cache_path = (
         Path(args.cache_file)
         if args.cache_file
-        else TONES_ROOT / "output" / "autoresearch" / "eval_cache.json"
+        else PROJECT_ROOT / "output" / "autoresearch" / "eval_cache.json"
     )
 
-    print(f"[init] Using TONES root: {TONES_ROOT}")
+    print(f"[init] Using project root: {PROJECT_ROOT}")
     print(f"[init] Using Ollama model: {llm_model}")
     print(f"[init] Log file: {log_path}")
     print(f"[init] Status file: {status_path}")
@@ -2092,6 +1702,21 @@ def main() -> None:
         raise RuntimeError("No participant data loaded from config.")
     print(f"[init] Loaded participant groups: {len(participant_data)}")
 
+    # Load production data (Track B) if available
+    production_data = None
+    if HAS_PRODUCTION_LOADER:
+        try:
+            production_data = load_production_data()
+            if production_data:
+                total_prod = sum(d["glucose"].shape[0] for d in production_data.values())
+                print(f"[init] Loaded production data: {len(production_data)} users, {total_prod} samples")
+            else:
+                print("[init] No production data found (run supabase_syncer first)")
+        except Exception as e:
+            print(f"[init] Production data loading failed: {e}")
+    else:
+        print("[init] Production data loader not available (onvox_bridge not in path)")
+
     ensure_log_schema(log_path)
     history = read_rows(log_path)
     if not history:
@@ -2100,7 +1725,7 @@ def main() -> None:
             print(f"[init] Bootstrapped policy history rows from backups: {len(seeded)}")
             history = seeded
     tried = set()
-    best_selection_score = None
+    best_balance = None
     for row in history:
         exp_key = row.get("exp_key", "")
         if exp_key:
@@ -2109,8 +1734,8 @@ def main() -> None:
             # Prefer multi-objective score if present, else legacy balance.
             bal = float(row.get("selection_score", row.get("balance", "nan")))
             status = row.get("status", "")
-            if status == "keep" and (best_selection_score is None or bal < best_selection_score):
-                best_selection_score = bal
+            if status == "keep" and (best_balance is None or bal < best_balance):
+                best_balance = bal
         except ValueError:
             pass
 
@@ -2125,7 +1750,8 @@ def main() -> None:
             "log_path": str(log_path),
             "last_update": started_at,
             "cycle": 0,
-            "best_selection_score": best_selection_score,
+            "best_selection_score": best_balance,
+            "best_balance": None,
             "last_result": None,
         },
     )
@@ -2139,7 +1765,7 @@ def main() -> None:
             "llm_model": llm_model,
             "cycle": cycle_value,
             "phase": phase,
-            "best_selection_score": best_selection_score,
+            "best_selection_score": best_balance,
             "log_path": str(log_path),
             "status_file": str(status_path),
             "pid_file": str(pid_path),
@@ -2168,7 +1794,7 @@ def main() -> None:
                     proposal, chosen_exp_key = choose_next_candidate(
                         llm_model=llm_model,
                         tried=tried,
-                        best_selection_score=best_selection_score,
+                        best_balance=best_balance,
                         cycle=cycle,
                         history=history,
                     )
@@ -2199,39 +1825,31 @@ def main() -> None:
                     )
                     row["source"] = source
 
-                    eval_result = evaluate_one(
+                    eval_result = evaluate_one_dual(
                         participant_data=participant_data,
+                        production_data=production_data,
                         model_name=model_name,
                         n_mfcc=n_mfcc,
                         cgm_lag_min=cgm_lag_min,
                         normalization=normalization,
                         feature_key=feature_key,
                         include_temporal=True,
-                        early_stop_cutoff=None if args.disable_early_stop else best_selection_score,
+                        early_stop_cutoff=None if args.disable_early_stop else best_balance,
                         early_stop_margin=max(args.early_stop_margin, 0.0),
                     )
 
                     current_score = eval_result.selection_score
-                    improved = best_selection_score is None or (
-                        current_score <= (best_selection_score - args.min_improvement)
+                    improved = best_balance is None or (
+                        current_score <= (best_balance - args.min_improvement)
                     )
                     status = "keep" if improved else "discard"
                     if status == "keep":
-                        best_selection_score = current_score
+                        best_balance = current_score
                     base_notes = (rationale + ";" + eval_result.notes) if eval_result.notes else (rationale or "ok")
                     if status == "discard":
                         tags = failure_tags(eval_result)
                         if tags:
                             base_notes = f"{base_notes};fail_tags={','.join(tags)}"
-                    inc_row = _best_incumbent_row(history)
-                    ab = _ab_tag_from_parts(
-                        model_name,
-                        n_mfcc,
-                        cgm_lag_min,
-                        feature_key,
-                        normalization,
-                        inc_row,
-                    )
                     row = row_from_eval(
                         cycle=cycle,
                         llm_model=llm_model,
@@ -2240,7 +1858,6 @@ def main() -> None:
                         exp_key=chosen_exp_key,
                         result=eval_result,
                         notes=base_notes,
-                        ab_tag=ab,
                     )
                     tried.add(chosen_exp_key)
                     print(
@@ -2273,7 +1890,7 @@ def main() -> None:
                     tried.add(str(k))
             print(
                 f"[init:v2] workers={workers} batch_size={batch_size} top_k={top_k} "
-                f"stage1=cheap_eval(n<={max(2, args.stage1_participants)}) cache_entries={len(cache)}"
+                f"stage1=heuristic cache_entries={len(cache)}"
             )
             while True:
                 if args.max_cycles > 0 and cycle >= args.max_cycles:
@@ -2284,7 +1901,7 @@ def main() -> None:
                 candidates = propose_candidate_batch(
                     llm_model=llm_model,
                     tried=tried,
-                    best_selection_score=best_selection_score,
+                    best_balance=best_balance,
                     cycle_start=cycle + 1,
                     history=history,
                     batch_size=batch_size,
@@ -2298,60 +1915,12 @@ def main() -> None:
 
                 if uncached:
                     write_runtime_status(
-                        "stage1_cheap_eval",
+                        "stage1_heuristic_rank",
                         cycle,
                         {"batch_size": len(candidates), "uncached": len(uncached)},
                     )
-                    n_sub = max(
-                        2,
-                        min(int(args.stage1_participants), len(participant_data)),
-                    )
-
-                    def _stage1_eval(c: Candidate) -> Tuple[str, float]:
-                        try:
-                            er = evaluate_one(
-                                participant_data,
-                                c.model_name,
-                                c.n_mfcc,
-                                c.cgm_lag_min,
-                                c.normalization,
-                                c.feature_key,
-                                include_temporal=False,
-                                early_stop_cutoff=None,
-                                early_stop_margin=0.0,
-                                max_participants=n_sub,
-                                eval_phase="stage1_proxy",
-                            )
-                            return c.exp_key, er.selection_score
-                        except Exception:
-                            return c.exp_key, stage1_heuristic_score(c, history)
-
-                    with ThreadPoolExecutor(max_workers=workers) as ex:
-                        futs = [ex.submit(_stage1_eval, c) for c in uncached]
-                        pending_s1 = set(futs)
-                        completed_s1 = 0
-                        while pending_s1:
-                            done_s1, pending_s1 = wait(
-                                pending_s1,
-                                timeout=15.0,
-                                return_when=FIRST_COMPLETED,
-                            )
-                            # Heartbeat while cheap evals run (stage2 already does this; stage1 could take many minutes).
-                            write_runtime_status(
-                                "stage1_cheap_eval",
-                                cycle,
-                                {
-                                    "batch_size": len(candidates),
-                                    "uncached": len(uncached),
-                                    "stage1_completed": completed_s1,
-                                    "stage1_total": len(uncached),
-                                    "stage1_pending": len(pending_s1),
-                                },
-                            )
-                            for fut in done_s1:
-                                ek, sc = fut.result()
-                                stage1_scores[ek] = sc
-                                completed_s1 += 1
+                    for cand in uncached:
+                        stage1_scores[cand.exp_key] = stage1_heuristic_score(cand, history)
 
                 selected: List[Candidate] = []
                 selected.extend([c for c in candidates if c.exp_key in cache])
@@ -2382,15 +1951,16 @@ def main() -> None:
                     with ThreadPoolExecutor(max_workers=workers) as ex:
                         futures = {
                             ex.submit(
-                                evaluate_one,
+                                evaluate_one_dual,
                                 participant_data,
+                                production_data,
                                 c.model_name,
                                 c.n_mfcc,
                                 c.cgm_lag_min,
                                 c.normalization,
                                 c.feature_key,
                                 True,
-                                None if args.disable_early_stop else best_selection_score,
+                                None if args.disable_early_stop else best_balance,
                                 max(args.early_stop_margin, 0.0),
                             ): c
                             for c in to_eval
@@ -2424,7 +1994,6 @@ def main() -> None:
                                 completed += 1
 
                 new_rows: List[Dict[str, str]] = []
-                incumbent_row = _best_incumbent_row(history)
                 for cand in selected:
                     cycle += 1
                     if args.max_cycles > 0 and cycle > args.max_cycles:
@@ -2458,22 +2027,20 @@ def main() -> None:
                                 exp_key=cand.exp_key,
                                 result=eval_result,
                                 notes=cand.rationale,
-                                ab_tag="",
                             )
                             note = cand.rationale
                         current_score = eval_result.selection_score
-                        improved = best_selection_score is None or (
-                            current_score <= (best_selection_score - args.min_improvement)
+                        improved = best_balance is None or (
+                            current_score <= (best_balance - args.min_improvement)
                         )
                         status = "keep" if improved else "discard"
                         if status == "keep":
-                            best_selection_score = current_score
+                            best_balance = current_score
                         base_notes = (note + ";" + eval_result.notes) if eval_result.notes else note
                         if status == "discard":
                             tags = failure_tags(eval_result)
                             if tags:
                                 base_notes = f"{base_notes};fail_tags={','.join(tags)}"
-                        ab = _ab_tag_for_candidate(cand, incumbent_row)
                         row = row_from_eval(
                             cycle=cycle,
                             llm_model=llm_model,
@@ -2482,7 +2049,6 @@ def main() -> None:
                             exp_key=cand.exp_key,
                             result=eval_result,
                             notes=base_notes,
-                            ab_tag=ab,
                         )
                     append_row(log_path, row)
                     history.append(row)
@@ -2505,7 +2071,7 @@ def main() -> None:
                     "ended_at": datetime.now().isoformat(timespec="seconds"),
                     "llm_model": llm_model,
                     "cycle": cycle,
-                    "best_selection_score": best_selection_score,
+                    "best_selection_score": best_balance,
                     "log_path": str(log_path),
                     "status_file": str(status_path),
                     "pid_file": str(pid_path),

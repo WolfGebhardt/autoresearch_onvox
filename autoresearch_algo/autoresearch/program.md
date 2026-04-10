@@ -1,32 +1,27 @@
-# autoresearch for TONES (voice + CGM)
+# autoresearch for ONVOX AutoResearch (voice + CGM)
 
-Use this program to run autonomous model discovery on the local TONES dataset at:
+Use this program to run autonomous model discovery on the local ONVOX AutoResearch dataset at:
 
-`C:\Users\whgeb\AutoResearch_WHG\TONES`
+`C:\Users\whgeb\AutoResearch_WHG\ONVOX AutoResearch`
 
 Goal: find population and personalized glucose estimation algorithms that improve accuracy using voice features matched to CGM labels.
 
 ## Scope
 
-- Treat `TONES` as the task repo.
-- Use existing paired voice/CGM data and loaders in `TONES`.
+- Treat `ONVOX AutoResearch` as the task repo.
+- Use existing paired voice/CGM data and loaders in `ONVOX AutoResearch`.
 - Prioritize algorithms and feature configurations that improve both:
   - personalized MAE (per participant)
   - population MAE (leave-one-person-out)
 
 ## Primary objective
 
-Lower **personalized** error and **time-respecting** error first. Treat **population LOSO**
-(`pop_mae` / `pop_r`) as a **secondary** screen: external ONVOX research shows **0/22** stages
-passing a strict population signal gate on voice-only, while **personal** models can pass
-when data density per user is high. This repo’s `selection_score` still blends both —
-use it for balanced search, but interpret **weak population r** as **expected**, not failure.
+Lower `pers_mae` and `pop_mae` (mg/dL), while keeping models practical for deployment.
 
 Secondary priorities:
-- better temporal validation (`temp_mae`, walk-forward / chrono)
-- stable per-participant performance (avoid one outlier driving the mean)
+- better temporal validation (`temp_mae`)
+- stable per-participant performance (avoid only one participant improving)
 - simpler configurations if quality is similar
-- **compact** feature bundles over maximal `all_features` on small cohorts (overfitting risk)
 
 ## SOTA + metric validation mandate
 
@@ -42,12 +37,12 @@ new search directions:
   - include temporal robustness and clinically-oriented checks
 - If metric mismatch is detected, update candidate ranking rules before continuing.
 
-## In-scope files (TONES)
+## In-scope files (ONVOX AutoResearch)
 
 - `hyperparameter_sweep.py` (main search loop, quick/full search spaces)
 - `sweep_evaluate.py` (evaluation tooling)
-- `tones/models/train.py` (model definitions / defaults)
-- `tones/features/*` (feature extraction variants)
+- `research/models/train.py` (model definitions / defaults)
+- `research/features/*` (feature extraction variants)
 - `config.yaml` (participants, matching, feature/model options)
 
 ## Constraints
@@ -55,7 +50,7 @@ new search directions:
 - Do not modify raw participant data files.
 - Keep all evaluation on matched voice/CGM pairs from existing pipeline.
 - Favor reproducible settings and explicit seeds where possible.
-- Keep output under `TONES/output/sweep`.
+- Keep output under `ONVOX AutoResearch/output/sweep`.
 
 ## Baseline and loop
 
@@ -83,24 +78,7 @@ new search directions:
   unseen-candidate mode until stability recovers.
 - Prefer text/code models for planning loops; avoid vision-first models as primary planner.
 
-## ONVOX / production ML learnings (aligned with autonomous search)
-
-Synthesize these when steering the loop (full detail lives in product `ML_LEARNINGS` docs):
-
-| Finding | Implication for this repo |
-|--------|---------------------------|
-| Population signal gate **0/22** passes on broad voice-only experiments | Do **not** expect `pop_r` to turn strongly positive; prioritize **pers_*** and **temp_*** trends. |
-| **Personal** GP / Ridge with physics-aware features can pass gate (e.g. MAE ~7, r~0.78 on dense user) | Dense per-user data matters more than feature count; favor **regularized** models and **moderate** MFCC + spectral + pitch paths. |
-| **Shuffled** CV **inflates** scores vs LOSO / temporal | Autoresearch uses **time-respecting** personalized CV and temporal splits — keep that honest protocol. |
-| HuBERT / contrastive / 68-dim nonlinear stacks | **Deprioritize** unless you add strict leakage checks; production stages showed **no** population signal and contrastive had **leakage** when eval was shuffled. |
-| VAD, augmentation, `all_features` on **~800** samples | **Harmful or neutral** — VAD removes informative pauses; augmentation breaks F0/spectral cues; huge stacks **overfit**. |
-| CGM **rate of change** as feature | **Never** — label leakage at inference. |
-| Mel HTK vs Slaney mismatch | If MFCCs mix scales across users, metrics can be **anti-correlated**; prefer **one** extraction pipeline per run (`config`/librosa settings). |
-| Improvement gate uses **relative** MAE drop vs **mean** baseline | Matches `pct_improvement` in `hyperparameter_sweep.py` (already consistent). |
-
-**Improvement priorities (external, ordered):** more calibrations per user \> mel-filter policy for scarce users \> GP transfer \> expand compact feature sets \> windowed models only with long clips.
-
-## ONVOX memory priors (search policy)
+## ONVOX memory priors (new)
 
 Apply these priors in autonomous search policy:
 
@@ -114,10 +92,8 @@ Apply these priors in autonomous search policy:
   - preserve temporal robustness penalties
   - include clinical quality checks (e.g., Clarke A+B behavior, calibration bias)
 - Add explicit signal gate tracking:
-  - participant-level gate: `r > 0.3` AND `improvement > 10%` AND **permutation** `p_value_perm < 0.05` on OOF preds
+  - participant-level gate: `r > 0.3` AND `improvement > 10%` AND `p < 0.05`
   - penalize candidates with very low gate pass rate.
-- `selection_score` weights **personal** MAE higher than population (0.65 / 0.35) given weak population voice-only signal.
-- Optional models/features: `PhysicsGP` (GPR with train caps in personalized CV; LOSO/temporal use `BayesianRidge` surrogate), `personal_10` compact 10-D bundle (MFCC0–1 means, centroid, F0, jitter/shimmer/HNR/f0_cv).
 - Prefer honest temporal protocol:
   - chronological 80/20 holdout for small participant histories
   - walk-forward validation for larger histories.

@@ -263,7 +263,7 @@ def evaluate_all_temporal(
     dict
         {model_name: {"chrono": metrics, "walkforward": metrics}}
     """
-    from tones.models.train import get_model
+    from research.models.train import get_model
 
     if len(X) < min_samples:
         logger.warning("Too few samples (%d < %d) for temporal validation", len(X), min_samples)

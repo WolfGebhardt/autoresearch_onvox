@@ -1,5 +1,5 @@
 """
-Configuration loader for TONES pipeline.
+Configuration loader for ONVOX AutoResearch pipeline.
 =========================================
 Single source of truth — reads config.yaml and resolves paths.
 """
@@ -18,14 +18,14 @@ _CONFIG_CACHE: Optional[Dict[str, Any]] = None
 
 def find_project_root() -> Path:
     """Find the project root by locating config.yaml, walking up from this file."""
-    current = Path(__file__).resolve().parent  # tones/
+    current = Path(__file__).resolve().parent  # research/
     for _ in range(5):
         if (current / "config.yaml").exists():
             return current
         current = current.parent
     raise FileNotFoundError(
         "Could not find config.yaml. "
-        "Set TONES_BASE_DIR environment variable or run from the project root."
+        "Set AUTORESEARCH_BASE_DIR environment variable or run from the project root."
     )
 
 
@@ -62,7 +62,7 @@ def load_config(config_path: Optional[str] = None, reload: bool = False) -> Dict
         cfg = yaml.safe_load(f)
 
     # Resolve base_dir: env var > config value > config file location
-    env_base = os.environ.get("TONES_BASE_DIR")
+    env_base = os.environ.get("AUTORESEARCH_BASE_DIR")
     if env_base:
         cfg["base_dir"] = str(Path(env_base).resolve())
     elif cfg.get("base_dir") is None:

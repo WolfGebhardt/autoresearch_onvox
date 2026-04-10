@@ -31,12 +31,12 @@ This repository contains the current working loop, monitor tools, and core evalu
 - `autoresearch/monitor_autonomous_gui.py` - GUI monitor with time-series plots.
 - `autoresearch/program_tones.md` - system prompt and domain priors.
 - `hyperparameter_sweep.py` - core feature extraction/evaluation entry points.
-- `tones/models/train.py` - model registry and metric computation.
-- `tones/evaluation/metrics.py` - Clarke Error Grid utilities.
-- `tones/evaluation/temporal_cv.py` - temporal validation utilities.
-- `tones/features/normalize.py` - normalization functions.
-- `tones/features/temporal.py` - temporal feature engineering.
-- `tones/config.py` and `config.yaml` - config loading and dataset paths.
+- `research/models/train.py` - model registry and metric computation.
+- `research/evaluation/metrics.py` - Clarke Error Grid utilities.
+- `research/evaluation/temporal_cv.py` - temporal validation utilities.
+- `research/features/normalize.py` - normalization functions.
+- `research/features/temporal.py` - temporal feature engineering.
+- `research/config.py` and `config.yaml` - config loading and dataset paths.
 
 ## Quick Start (Windows / PowerShell)
 

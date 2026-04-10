@@ -1,13 +1,12 @@
-# Defaults tuned for ~12 logical CPUs / 32GB RAM / local Ollama (leave headroom for LLM + GUI).
 param(
   [string]$Model = "",
   [int]$MaxCycles = 0,
   [double]$MinImprovement = 0.03,
   [ValidateSet("classic","v2")][string]$OptimizerMode = "v2",
-  [int]$ParallelWorkers = 5,
-  [int]$BatchSize = 10,
+  [int]$ParallelWorkers = 2,
+  [int]$BatchSize = 6,
   [int]$Stage1Participants = 4,
-  [int]$Stage1TopK = 4,
+  [int]$Stage1TopK = 2,
   [double]$EarlyStopMargin = 0.4,
   [switch]$DisableEarlyStop,
   [switch]$Background,
@@ -26,15 +25,10 @@ param(
   [switch]$GuiMonitor,
   [int]$GuiIntervalMs = 4000,
   [int]$GuiSnapshotMinutes = 10,
-  [int]$GuiSnapshotDpi = 160,
-  [double]$GuiTargetSelectionScore = 11.5,
-  [double]$GuiTargetMae = 11.0,
+  [double]$GuiTargetSelectionScore = 12.0,
+  [double]$GuiTargetMae = 12.0,
   [double]$GuiTargetPopR = 0.10,
-  [double]$GuiTargetTempR = 0.05,
-  [int]$OllamaTimeoutSec = 300,
-  [int]$OllamaRetries = 3,
-  [double]$OllamaRetrySleepSec = 2.0,
-  [switch]$RestartOllama
+  [double]$GuiTargetTempR = 0.05
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,7 +36,7 @@ $ErrorActionPreference = "Stop"
 $tonesRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $tonesRoot
 
-Write-Host "[init] TONES root: $tonesRoot"
+Write-Host "[init] ONVOX root: $tonesRoot"
 
 function Resolve-DefaultModel {
   param(
@@ -77,14 +71,6 @@ function Resolve-DefaultModel {
   return "qwen2.5-coder:7b"
 }
 
-if ($RestartOllama) {
-  Write-Host "[init] Restarting Ollama (stop existing, then serve)..."
-  Get-Process -Name "ollama" -ErrorAction SilentlyContinue | Stop-Process -Force
-  Start-Sleep -Seconds 2
-  Start-Process -FilePath "ollama" -ArgumentList "serve" -WindowStyle Hidden
-  Start-Sleep -Seconds 4
-}
-
 # Ensure Ollama is running
 try {
   $null = Invoke-WebRequest -Uri "http://127.0.0.1:11434/api/tags" -UseBasicParsing -TimeoutSec 2
@@ -96,7 +82,7 @@ catch {
   Start-Sleep -Seconds 3
 }
 
-$scriptPath = Join-Path $PSScriptRoot "tones_autonomous_llm_loop.py"
+$scriptPath = Join-Path $PSScriptRoot "autonomous_llm_loop.py"
 $monitorPath = Join-Path $PSScriptRoot "monitor_autonomous_progress.py"
 $monitorGuiPath = Join-Path $PSScriptRoot "monitor_autonomous_gui.py"
 $llmfitExe = Join-Path $PSScriptRoot "tools\llmfit\llmfit-v0.8.1-x86_64-pc-windows-msvc\llmfit.exe"
@@ -129,7 +115,7 @@ if ($Stop) {
 if ($PopupWatch) {
   $watchScript = Join-Path $PSScriptRoot "start_tones_autonomous.ps1"
   $popupCmd = @(
-    "`$Host.UI.RawUI.WindowTitle = 'TONES Monitor'"
+    "`$Host.UI.RawUI.WindowTitle = 'ONVOX Monitor'"
     "try { `$size = `$Host.UI.RawUI.WindowSize; `$size.Width = 96; `$size.Height = 28; `$Host.UI.RawUI.WindowSize = `$size } catch {}"
     "Set-Location `"$tonesRoot`""
     "powershell -ExecutionPolicy Bypass -File `"$watchScript`" -Watch"
@@ -141,9 +127,9 @@ if ($PopupWatch) {
 
 if ($GuiMonitor) {
   $guiCmd = @(
-    "`$Host.UI.RawUI.WindowTitle = 'TONES GUI Monitor Launcher'"
+    "`$Host.UI.RawUI.WindowTitle = 'ONVOX GUI Monitor Launcher'"
     "Set-Location `"$tonesRoot`""
-    "python `"$monitorGuiPath`" --status-file `"$statusFile`" --tsv-file `"$runsFile`" --interval-ms $GuiIntervalMs --snapshot-minutes $GuiSnapshotMinutes --snapshot-dpi $GuiSnapshotDpi --target-selection-score $GuiTargetSelectionScore --target-mae $GuiTargetMae --target-pop-r $GuiTargetPopR --target-temp-r $GuiTargetTempR"
+    "python `"$monitorGuiPath`" --status-file `"$statusFile`" --tsv-file `"$runsFile`" --interval-ms $GuiIntervalMs --snapshot-minutes $GuiSnapshotMinutes --target-selection-score $GuiTargetSelectionScore --target-mae $GuiTargetMae --target-pop-r $GuiTargetPopR --target-temp-r $GuiTargetTempR"
   ) -join "; "
   Start-Process -FilePath "powershell" -ArgumentList @("-NoExit", "-Command", $guiCmd) -WorkingDirectory $tonesRoot
   Write-Host "[watch] opened GUI monitor window."
@@ -196,11 +182,6 @@ $argsList += @(
 if ($DisableEarlyStop) {
   $argsList += "--disable-early-stop"
 }
-$argsList += @(
-  "--ollama-timeout-sec", "$OllamaTimeoutSec",
-  "--ollama-retries", "$OllamaRetries",
-  "--ollama-retry-sleep-sec", "$OllamaRetrySleepSec"
-)
 
 if ($Watchdog) {
   $interval = [Math]::Max($WatchdogIntervalSec, 5)

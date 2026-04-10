@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-TONES — Systematic Hyperparameter & Feature Configuration Sweep
+ONVOX AutoResearch — Systematic Hyperparameter & Feature Configuration Sweep
 =================================================================
 Produces a comprehensive analysis of which configurations work best for:
   - Personalized models (per-participant CV)
@@ -11,7 +11,7 @@ Sweeps over:
   2. Feature combinations: MFCC-only, +spectral, +pitch, +voice_quality, +temporal, all
   3. Normalization: none, zscore, rank
   4. Model algorithms: Ridge, BayesianRidge, SVR, ElasticNet, Lasso, Huber,
-     RandomForest, GradientBoosting, ExtraTrees, KNN, PhysicsGP (GPR; capped in personal CV)
+     RandomForest, GradientBoosting, ExtraTrees, KNN
 
 Output:
   - output/sweep/results.json          — full machine-readable results
@@ -27,7 +27,6 @@ Usage:
 
 import argparse
 import gc
-import os
 import json
 import logging
 import sys
@@ -49,24 +48,23 @@ import matplotlib.gridspec as gridspec
 
 warnings.filterwarnings("ignore")
 
-# TONES modules
-from tones.config import load_config, get_base_dir
-from tones.data.loaders import load_participant_data, collect_audio_files
-from tones.features.mfcc import MFCCExtractor
-from tones.features.voice_quality import VoiceQualityExtractor
-from tones.features.normalize import zscore_per_speaker, rank_normalize_per_speaker
-from tones.features.temporal import compute_circadian_features, compute_delta_features, compute_time_since_last
-from tones.models.train import (
+# Research modules
+from research.config import load_config, get_base_dir
+from research.data.loaders import load_participant_data, collect_audio_files
+from research.features.mfcc import MFCCExtractor
+from research.features.voice_quality import VoiceQualityExtractor
+from research.features.normalize import zscore_per_speaker, rank_normalize_per_speaker
+from research.features.temporal import compute_circadian_features, compute_delta_features, compute_time_since_last
+from research.models.train import (
     get_model,
     compute_metrics,
     mean_predictor_baseline,
-    permutation_p_value_pearson,
 )
-from tones.evaluation.temporal_cv import chronological_split, train_personalized_walkforward
+from research.evaluation.temporal_cv import chronological_split, train_personalized_walkforward
 
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import RobustScaler
-from sklearn.model_selection import LeaveOneOut, TimeSeriesSplit, LeaveOneGroupOut
+from sklearn.model_selection import LeaveOneOut, KFold, LeaveOneGroupOut
 
 logger = logging.getLogger(__name__)
 
@@ -83,58 +81,9 @@ FEATURE_COMBOS = {
     "mfcc+spectral+pitch+vq":  dict(include_spectral=True,  include_pitch=True,  use_vq=True,  use_temporal=False),
     "mfcc+spectral+pitch+temporal": dict(include_spectral=True, include_pitch=True, use_vq=False, use_temporal=True),
     "all_features":            dict(include_spectral=True,  include_pitch=True,  use_vq=True,  use_temporal=True),
-    # Compact ONVOX-aligned bundle (~10 dims): MFCC0–1 means, centroid, F0 stats, VQ jitter/shimmer/HNR/f0_cv
-    "personal_10": dict(include_spectral=True, include_pitch=True, use_vq=True, use_temporal=False),
 }
 
 NORM_METHODS = ["none", "zscore", "rank"]
-
-# Permutation-test size for p_value_perm in personalized CV (override with TONES_PERM_N).
-_PERM_N_DEFAULT = int(os.environ.get("TONES_PERM_N", "400"))
-PHYSICS_GP_MAX_TRAIN = 200
-
-PERSONAL_10_TARGETS = [
-    "mfcc_0_mean",
-    "mfcc_1_mean",
-    "spectral_centroid_mean",
-    "f0_mean",
-    "f0_std",
-    "f0_median",
-    "jitter_local",
-    "shimmer_local",
-    "hnr",
-    "f0_cv",
-]
-
-
-def _personal_10_column_indices(n_mfcc: int) -> List[int]:
-    mfcc_ext = MFCCExtractor(
-        sr=16000,
-        n_mfcc=n_mfcc,
-        fmin=50,
-        fmax=8000,
-        include_spectral=True,
-        include_pitch=True,
-        include_mel=False,
-    )
-    names = list(mfcc_ext.feature_names)
-    vq_ext = VoiceQualityExtractor(sr=16000)
-    names.extend(vq_ext.feature_names)
-    idx = []
-    for t in PERSONAL_10_TARGETS:
-        if t not in names:
-            raise ValueError(f"personal_10: missing feature {t!r}")
-        idx.append(names.index(t))
-    return idx
-
-
-def _subsample_train_idx(train_idx: np.ndarray, max_n: int, seed: int) -> np.ndarray:
-    train_idx = np.asarray(train_idx)
-    if len(train_idx) <= max_n:
-        return train_idx
-    rng = np.random.default_rng(seed)
-    return rng.choice(train_idx, size=max_n, replace=False)
-
 
 MODEL_NAMES = [
     "Ridge",
@@ -147,7 +96,6 @@ MODEL_NAMES = [
     "GradientBoosting",
     "ExtraTrees",
     "KNN",
-    "PhysicsGP",
 ]
 
 # Quick mode: reduced search
@@ -225,13 +173,8 @@ def extract_features_config(
     use_vq: bool,
     use_temporal: bool,
     normalization: str,
-    feature_key: str = "",
 ) -> Dict[str, Dict]:
-    """Extract features with specified configuration. Loads audio from paths on-the-fly.
-
-    When ``feature_key == \"personal_10\"``, slice to a compact 10-D bundle after full
-    mfcc+spectral+pitch+vq extraction (incompatible with ``use_temporal``).
-    """
+    """Extract features with specified configuration. Loads audio from paths on-the-fly."""
     import librosa
 
     mfcc_ext = MFCCExtractor(
@@ -316,38 +259,12 @@ def extract_features_config(
         result[n]["features"] = np.nan_to_num(result[n]["features"], nan=0, posinf=0, neginf=0)
         result[n]["features_raw"] = np.nan_to_num(result[n]["features_raw"], nan=0, posinf=0, neginf=0)
 
-    if feature_key == "personal_10":
-        if use_temporal:
-            logger.warning(
-                "personal_10 with use_temporal=True is unsupported; skipping column slice.",
-            )
-        else:
-            idx = _personal_10_column_indices(n_mfcc)
-            for n in result:
-                result[n]["features"] = result[n]["features"][:, idx]
-                result[n]["features_raw"] = result[n]["features_raw"][:, idx]
-
     return result
 
 
 # =============================================================================
 # Step 3: Evaluate a single configuration
 # =============================================================================
-
-def _timestamp_sort_order(timestamps: List) -> np.ndarray:
-    """Return index order that sorts samples by time (stable). Invalid times keep original order."""
-    tnum = np.array(
-        [
-            datetime.fromisoformat(str(t)).timestamp() if t is not None else float("nan")
-            for t in timestamps
-        ],
-        dtype=float,
-    )
-    n = len(tnum)
-    if n == 0 or np.any(~np.isfinite(tnum)):
-        return np.arange(n)
-    return np.argsort(tnum, kind="stable")
-
 
 def _fit_apply_fold_normalization(
     X_train: np.ndarray,
@@ -384,86 +301,30 @@ def evaluate_personalized(
     model_name: str,
     normalization_method: str = "none",
 ) -> Dict[str, Dict]:
-    """Evaluate personalized models with time-respecting CV (train only on past within each split).
-
-    Uses ``TimeSeriesSplit`` on samples sorted by timestamp. Metrics use only rows with
-    out-of-fold predictions (early samples may be train-only in expanding-window CV).
-
-    ``PhysicsGP`` caps per-fold training rows (``PHYSICS_GP_MAX_TRAIN``) for cost.
-    Adds ``p_value_perm`` (permutation test on Pearson r; count ``TONES_PERM_N``).
-    """
+    """Evaluate personalized models for all participants with fold-safe normalization."""
     results = {}
     for name, fdata in features_data.items():
         X = fdata.get("features_raw", fdata["features"])
         y = fdata["glucose"]
-        ts_raw = fdata.get("timestamps", [])
         if len(X) < 20:
             continue
         try:
-            order = _timestamp_sort_order(list(ts_raw) if ts_raw is not None else [])
-            if len(order) != len(X):
-                order = np.arange(len(X))
-            X = np.asarray(X)[order]
-            y = np.asarray(y, dtype=float)[order]
-
-            n = len(X)
-            preds = np.full(n, np.nan, dtype=float)
-
-            # Very small n: LOO is still optimistic for autocorrelated series but avoids empty test.
-            if n <= 30:
-                cv = LeaveOneOut()
-                fold_i = 0
-                for train_idx, test_idx in cv.split(X, y):
-                    tr = _subsample_train_idx(
-                        train_idx, PHYSICS_GP_MAX_TRAIN, 42 + fold_i
-                    ) if model_name == "PhysicsGP" else train_idx
-                    X_train, X_test = X[tr], X[test_idx]
-                    y_train = y[tr]
-                    X_train, X_test = _fit_apply_fold_normalization(
-                        X_train, X_test, normalization_method
-                    )
-                    fold_pipeline = Pipeline(
-                        [("scaler", RobustScaler()), ("model", get_model(model_name))]
-                    )
-                    fold_pipeline.fit(X_train, y_train)
-                    preds[test_idx] = fold_pipeline.predict(X_test)
-                    fold_i += 1
-            else:
-                n_splits = min(10, max(2, n // 15))
-                n_splits = min(n_splits, max(2, n - 3))
-                tscv = TimeSeriesSplit(n_splits=n_splits)
-                fold_i = 0
-                for train_idx, test_idx in tscv.split(X):
-                    tr = _subsample_train_idx(
-                        train_idx, PHYSICS_GP_MAX_TRAIN, 42 + fold_i
-                    ) if model_name == "PhysicsGP" else train_idx
-                    X_train, X_test = X[tr], X[test_idx]
-                    y_train = y[tr]
-                    X_train, X_test = _fit_apply_fold_normalization(
-                        X_train, X_test, normalization_method
-                    )
-                    fold_pipeline = Pipeline(
-                        [("scaler", RobustScaler()), ("model", get_model(model_name))]
-                    )
-                    fold_pipeline.fit(X_train, y_train)
-                    preds[test_idx] = fold_pipeline.predict(X_test)
-                    fold_i += 1
-
-            mask = np.isfinite(preds)
-            if int(mask.sum()) < 10:
-                continue
-            metrics = compute_metrics(y[mask], preds[mask])
-            metrics["p_value_perm"] = permutation_p_value_pearson(
-                y[mask], preds[mask], n_perm=_PERM_N_DEFAULT
-            )
-            baseline = mean_predictor_baseline(y[mask])
+            cv = LeaveOneOut() if len(X) <= 50 else KFold(n_splits=10, shuffle=True, random_state=42)
+            preds = np.zeros_like(y, dtype=float)
+            for train_idx, test_idx in cv.split(X, y):
+                X_train, X_test = X[train_idx], X[test_idx]
+                y_train = y[train_idx]
+                X_train, X_test = _fit_apply_fold_normalization(
+                    X_train, X_test, normalization_method
+                )
+                fold_pipeline = Pipeline([("scaler", RobustScaler()), ("model", get_model(model_name))])
+                fold_pipeline.fit(X_train, y_train)
+                preds[test_idx] = fold_pipeline.predict(X_test)
+            metrics = compute_metrics(y, preds)
+            baseline = mean_predictor_baseline(y)
             metrics["baseline_mae"] = baseline["mae"]
             metrics["improvement"] = baseline["mae"] - metrics["mae"]
-            metrics["pct_improvement"] = (
-                100 * metrics["improvement"] / baseline["mae"] if baseline["mae"] > 0 else 0
-            )
-            metrics["cv_strategy"] = "time_series_split" if n > 30 else "loo_small_n"
-            metrics["n_oof"] = int(mask.sum())
+            metrics["pct_improvement"] = 100 * metrics["improvement"] / baseline["mae"] if baseline["mae"] > 0 else 0
             results[name] = metrics
         except Exception as e:
             logger.warning("  %s/%s failed: %s", name, model_name, e)
@@ -476,7 +337,6 @@ def evaluate_population(
     normalization_method: str = "none",
 ) -> Dict:
     """Evaluate population model (LOPO) with train-fold normalization only."""
-    reg_name = "BayesianRidge" if model_name == "PhysicsGP" else model_name
     all_X, all_y, all_groups = [], [], []
     for name, fdata in features_data.items():
         all_X.append(fdata["features"])
@@ -499,14 +359,13 @@ def evaluate_population(
             X_train, X_test = _fit_apply_fold_normalization(
                 X_train, X_test, normalization_method
             )
-            fold_pipeline = Pipeline([("scaler", RobustScaler()), ("model", get_model(reg_name))])
+            fold_pipeline = Pipeline([("scaler", RobustScaler()), ("model", get_model(model_name))])
             fold_pipeline.fit(X_train, y_train)
             preds[test_idx] = fold_pipeline.predict(X_test)
         metrics = compute_metrics(y, preds)
         baseline = mean_predictor_baseline(y)
         metrics["baseline_mae"] = baseline["mae"]
         metrics["improvement"] = baseline["mae"] - metrics["mae"]
-        metrics["population_surrogate_model"] = reg_name
 
         # Per-person breakdown
         per_person = {}
@@ -528,7 +387,6 @@ def evaluate_temporal(
     normalization_method: str = "none",
 ) -> Dict[str, Dict]:
     """Temporal validation: walk-forward when possible, else 80/20 chronological."""
-    reg_name = "BayesianRidge" if model_name == "PhysicsGP" else model_name
     results = {}
     for name, fdata in features_data.items():
         X, y = fdata["features"], fdata["glucose"]
@@ -546,7 +404,7 @@ def evaluate_temporal(
                 # We keep feature normalization conservative by applying none here and relying on
                 # robust scaler inside temporal utility pipeline.
                 def factory():
-                    return get_model(reg_name)
+                    return get_model(model_name)
                 wf = train_personalized_walkforward(
                     X=np.nan_to_num(Xs, nan=0, posinf=0, neginf=0),
                     y=ys,
@@ -565,14 +423,13 @@ def evaluate_temporal(
                 metrics["n_train"] = int(wf.get("n_train", 0))
                 metrics["n_test"] = int(wf.get("n_test", len(y_test)))
                 metrics["cv_strategy"] = "walk_forward"
-                metrics["temporal_surrogate_model"] = reg_name
                 results[name] = metrics
             else:
                 X_train, X_test, y_train, y_test = chronological_split(X, y, timestamps, train_fraction=0.8)
                 X_train, X_test = _fit_apply_fold_normalization(
                     X_train, X_test, normalization_method
                 )
-                model = get_model(reg_name)
+                model = get_model(model_name)
                 pipeline = Pipeline([("scaler", RobustScaler()), ("model", model)])
                 pipeline.fit(X_train, y_train)
                 preds = pipeline.predict(X_test)
@@ -583,10 +440,118 @@ def evaluate_temporal(
                 metrics["n_train"] = len(y_train)
                 metrics["n_test"] = len(y_test)
                 metrics["cv_strategy"] = "chrono_80_20"
-                metrics["temporal_surrogate_model"] = reg_name
                 results[name] = metrics
         except Exception as e:
             logger.warning("  %s temporal/%s failed: %s", name, model_name, e)
+    return results
+
+
+# =============================================================================
+# Step 3b: Evaluate production data (pre-extracted features from Supabase)
+# =============================================================================
+
+# BackgroundTrainer feature subsets (must match background_trainer.py)
+PRODUCTION_FEATURE_SUBSETS = {
+    'edge_10': list(range(10)),
+    'personal_10': [0, 1, 80, 99, 90, 91, 97, 98, 100, 101],
+    'dynamics_10': [20, 48, 52, 59, 80, 85, 90, 91, 97, 98],
+    'personal_14': [0, 1, 80, 99, 90, 91, 97, 98, 100, 101, 112, 113, 114, 115],
+    'personal_10_time': [0, 1, 80, 99, 90, 91, 97, 98, 100, 101, 95, 96, 117, 118],
+    'mfcc_13': list(range(13)),
+    'spectral_8': [0, 1, 80, 81, 82, 83, 84, 85],
+    'full': None,
+}
+
+
+def evaluate_production(
+    production_data: Dict[str, Dict],
+    model_name: str,
+    feature_subset: str = "personal_10",
+    normalization_method: str = "none",
+) -> Dict[str, Dict]:
+    """Evaluate personalized models on pre-extracted production features.
+
+    Uses expanding-window CV (same as BackgroundTrainer) instead of LOO/KFold.
+
+    Args:
+        production_data: Dict from load_production_data() with keys
+            {user_id: {"features": np.ndarray, "glucose": np.ndarray, "timestamps": list}}
+        model_name: sklearn model name (Ridge, BayesianRidge, SVR, etc.)
+        feature_subset: Key from PRODUCTION_FEATURE_SUBSETS
+        normalization_method: "none", "zscore", or "rank"
+
+    Returns:
+        Dict of per-user metrics, same shape as evaluate_personalized().
+    """
+    indices = PRODUCTION_FEATURE_SUBSETS.get(feature_subset)
+    results = {}
+
+    for user_id, udata in production_data.items():
+        X_full = udata["features"]
+        y = udata["glucose"]
+
+        if len(y) < 10:
+            continue
+
+        # Apply feature subset
+        if indices is not None:
+            valid_indices = [i for i in indices if i < X_full.shape[1]]
+            if not valid_indices:
+                continue
+            X = X_full[:, valid_indices]
+        else:
+            X = X_full
+
+        try:
+            # Expanding-window CV (chronological, matches BackgroundTrainer)
+            timestamps = udata.get("timestamps", [])
+            if timestamps:
+                # Sort by timestamp
+                try:
+                    order = np.argsort([str(t) for t in timestamps])
+                    X = X[order]
+                    y = y[order]
+                except Exception:
+                    pass
+
+            min_train = max(10, int(len(y) * 0.3))
+            preds = np.full(len(y), np.nan)
+            for split_idx in range(min_train, len(y)):
+                X_train, X_test = X[:split_idx], X[split_idx:split_idx+1]
+                y_train = y[:split_idx]
+
+                X_train, X_test = _fit_apply_fold_normalization(
+                    X_train, X_test, normalization_method
+                )
+
+                fold_pipeline = Pipeline([
+                    ("scaler", RobustScaler()),
+                    ("model", get_model(model_name)),
+                ])
+                fold_pipeline.fit(X_train, y_train)
+                preds[split_idx] = fold_pipeline.predict(X_test)[0]
+
+            # Only evaluate on predicted samples
+            valid_mask = ~np.isnan(preds)
+            if valid_mask.sum() < 5:
+                continue
+
+            y_eval = y[valid_mask]
+            p_eval = preds[valid_mask]
+            metrics = compute_metrics(y_eval, p_eval)
+            baseline = mean_predictor_baseline(y_eval)
+            metrics["baseline_mae"] = baseline["mae"]
+            metrics["improvement"] = baseline["mae"] - metrics["mae"]
+            metrics["pct_improvement"] = (
+                100 * metrics["improvement"] / baseline["mae"]
+                if baseline["mae"] > 0 else 0
+            )
+            metrics["n_train_final"] = int(valid_mask.sum())
+            metrics["feature_subset"] = feature_subset
+            results[user_id] = metrics
+        except Exception as e:
+            logger.warning("  %s/%s production eval failed: %s", user_id[:8], model_name, e)
+
     return results
 
 
@@ -624,7 +589,6 @@ def run_sweep(
                         use_vq=combo_cfg["use_vq"],
                         use_temporal=combo_cfg["use_temporal"],
                         normalization=norm,
-                        feature_key=combo_name,
                     )
                 except Exception as e:
                     logger.error("Feature extraction failed: %s", e, exc_info=True)
@@ -1053,7 +1017,7 @@ def generate_html_report(df: pd.DataFrame, fig_dir: Path, output_dir: Path):
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TONES — Hyperparameter Sweep Report</title>
+<title>ONVOX AutoResearch — Hyperparameter Sweep Report</title>
 <style>
   body {{ font-family: 'Segoe UI', Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #fafafa; color: #333; }}
   h1 {{ color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }}
@@ -1076,7 +1040,7 @@ def generate_html_report(df: pd.DataFrame, fig_dir: Path, output_dir: Path):
 </head>
 <body>
 
-<h1>TONES — Voice-Based Glucose Estimation<br>Hyperparameter &amp; Feature Configuration Analysis</h1>
+<h1>ONVOX AutoResearch — Voice-Based Glucose Estimation<br>Hyperparameter &amp; Feature Configuration Analysis</h1>
 <p>Generated: {now} | Configurations tested: {n_configs} | Participants: {n_participants} | Total samples: {total_samples}</p>
 
 <div class="section">
@@ -1250,7 +1214,7 @@ def generate_html_report(df: pd.DataFrame, fig_dir: Path, output_dir: Path):
 </div>
 
 <div class="footer">
-  ONVOX / TONES Project — Voice-Based Glucose Estimation<br>
+  ONVOX AutoResearch Project — Voice-Based Glucose Estimation<br>
   Report generated by hyperparameter_sweep.py | {now}
 </div>
 
@@ -1268,7 +1232,7 @@ def generate_html_report(df: pd.DataFrame, fig_dir: Path, output_dir: Path):
 # =============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="TONES Hyperparameter Sweep")
+    parser = argparse.ArgumentParser(description="ONVOX Hyperparameter Sweep")
     parser.add_argument("--config", type=str, default=None, help="Path to config.yaml")
     parser.add_argument("--quick", action="store_true", help="Reduced sweep (fast)")
     parser.add_argument("--participants", nargs="+", default=None, help="Filter participants")
@@ -1279,7 +1243,7 @@ def main():
     start = time.time()
 
     logger.info("=" * 70)
-    logger.info("TONES — Hyperparameter & Feature Configuration Sweep")
+    logger.info("ONVOX AutoResearch — Hyperparameter & Feature Configuration Sweep")
     logger.info("=" * 70)
 
     cfg = load_config(args.config)
