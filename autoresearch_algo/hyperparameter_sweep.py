@@ -75,12 +75,15 @@ logger = logging.getLogger(__name__)
 MFCC_COUNTS = [8, 13, 20, 30, 40]
 
 FEATURE_COMBOS = {
-    "mfcc_only":               dict(include_spectral=False, include_pitch=False, use_vq=False, use_temporal=False),
-    "mfcc+spectral":           dict(include_spectral=True,  include_pitch=False, use_vq=False, use_temporal=False),
-    "mfcc+spectral+pitch":     dict(include_spectral=True,  include_pitch=True,  use_vq=False, use_temporal=False),
-    "mfcc+spectral+pitch+vq":  dict(include_spectral=True,  include_pitch=True,  use_vq=True,  use_temporal=False),
-    "mfcc+spectral+pitch+temporal": dict(include_spectral=True, include_pitch=True, use_vq=False, use_temporal=True),
-    "all_features":            dict(include_spectral=True,  include_pitch=True,  use_vq=True,  use_temporal=True),
+    "mfcc_only":               dict(include_spectral=False, include_pitch=False, use_vq=False, use_temporal=False, deconfound=False),
+    "mfcc+spectral":           dict(include_spectral=True,  include_pitch=False, use_vq=False, use_temporal=False, deconfound=False),
+    "mfcc+spectral+pitch":     dict(include_spectral=True,  include_pitch=True,  use_vq=False, use_temporal=False, deconfound=False),
+    "mfcc+spectral+pitch+vq":  dict(include_spectral=True,  include_pitch=True,  use_vq=True,  use_temporal=False, deconfound=False),
+    "mfcc+spectral+pitch+temporal": dict(include_spectral=True, include_pitch=True, use_vq=False, use_temporal=True, deconfound=False),
+    "all_features":            dict(include_spectral=True,  include_pitch=True,  use_vq=True,  use_temporal=True,  deconfound=False),
+    # Biophysics-informed combos (Apr 2026)
+    "pathway_ab":              dict(include_spectral=True,  include_pitch=True,  use_vq=True,  use_temporal=False, deconfound=False),
+    "deconfounded":            dict(include_spectral=True,  include_pitch=True,  use_vq=True,  use_temporal=True,  deconfound=True),
 }
 
 NORM_METHODS = ["none", "zscore", "rank"]
@@ -165,6 +168,54 @@ def load_all_audio(cfg, participants_filter=None) -> Dict[str, Dict]:
 # Step 2: Extract features for a given configuration
 # =============================================================================
 
+def _deconfound_circadian(
+    X: np.ndarray,
+    timestamps: list,
+    f0_col_indices: List[int],
+) -> np.ndarray:
+    """Regress out circadian (hour-of-day) from F0-adjacent feature columns.
+
+    For each column in f0_col_indices, fits y_col ~ hour_sin + hour_cos
+    and replaces the column with residuals. Pure numpy (lstsq).
+    Does NOT touch Pathway B features (alpha_ratio, shimmer, etc.).
+    """
+    if not f0_col_indices or len(X) < 3:
+        return X
+
+    hours = np.zeros(len(timestamps), dtype=np.float64)
+    for i, ts in enumerate(timestamps):
+        try:
+            if hasattr(ts, 'hour'):
+                hours[i] = ts.hour + ts.minute / 60.0
+            else:
+                from datetime import datetime as dt
+                t = dt.fromisoformat(str(ts))
+                hours[i] = t.hour + t.minute / 60.0
+        except Exception:
+            hours[i] = 12.0
+
+    phase = 2.0 * np.pi * hours / 24.0
+    A = np.column_stack([np.sin(phase), np.cos(phase), np.ones(len(hours))])
+
+    X_out = X.copy()
+    for col_idx in f0_col_indices:
+        if col_idx >= X.shape[1]:
+            continue
+        y_col = X[:, col_idx].astype(np.float64)
+        try:
+            coeffs, _, _, _ = np.linalg.lstsq(A, y_col, rcond=None)
+            X_out[:, col_idx] = y_col - A @ coeffs
+        except Exception:
+            pass
+    return X_out
+
+
+_F0_ADJACENT_NAMES = {
+    "f0_mean", "f0_std", "f0_median", "f0_p10", "f0_p90",
+    "hnr", "ptp_proxy", "f0_cv", "f0_skew", "f0_kurtosis",
+}
+
+
 def extract_features_config(
     participant_data: Dict[str, Dict],
     n_mfcc: int,
@@ -173,6 +224,7 @@ def extract_features_config(
     use_vq: bool,
     use_temporal: bool,
     normalization: str,
+    deconfound: bool = False,
 ) -> Dict[str, Dict]:
     """Extract features with specified configuration. Loads audio from paths on-the-fly."""
     import librosa
@@ -237,6 +289,20 @@ def extract_features_config(
             time_since = compute_time_since_last(ts)
             X = np.hstack([X, circ, deltas, time_since])
             rdata["features"] = X
+
+    # Deconfound: regress out circadian drift from F0-adjacent features
+    if deconfound:
+        feat_names = list(mfcc_ext.feature_names)
+        if vq_ext is not None:
+            feat_names.extend(VoiceQualityExtractor.FEATURE_NAMES)
+        f0_col_indices = [
+            i for i, name in enumerate(feat_names) if name in _F0_ADJACENT_NAMES
+        ]
+        if f0_col_indices:
+            for name, rdata in result.items():
+                rdata["features"] = _deconfound_circadian(
+                    rdata["features"], rdata["timestamps"], f0_col_indices
+                )
 
     # Keep raw (pre-normalization) features for leakage-safe fold transforms.
     for name in result:
@@ -589,6 +655,7 @@ def run_sweep(
                         use_vq=combo_cfg["use_vq"],
                         use_temporal=combo_cfg["use_temporal"],
                         normalization=norm,
+                        deconfound=combo_cfg.get("deconfound", False),
                     )
                 except Exception as e:
                     logger.error("Feature extraction failed: %s", e, exc_info=True)

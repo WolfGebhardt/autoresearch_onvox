@@ -44,6 +44,12 @@ class VoiceQualityExtractor:
         "hnr", "cpp",
         "f0_cv", "f0_skew", "f0_kurtosis",
         "voiced_ratio",
+        # Pathway-specific features (biophysics-informed, Apr 2026)
+        "alpha_ratio",    # Pathway B: log energy ratio (1-5kHz)/(50-1000Hz)
+        "spectral_tilt",  # Pathway B: linear regression slope of log-magnitude spectrum
+        "f0_p10",         # Pathway A: F0 10th percentile (osmotic stiffness floor)
+        "f0_p90",         # Pathway A: F0 90th percentile
+        "ptp_proxy",      # Pathway A: min RMS in first 0.5s (phonation threshold pressure proxy)
     ]
 
     def __init__(self, sr: int = 16000, fmin: float = 65.0, fmax: float = 500.0):
@@ -216,6 +222,59 @@ class VoiceQualityExtractor:
                     features[self.FEATURE_NAMES.index("formant_f2")] = formant_freqs[1]
                 if len(formant_freqs) >= 3:
                     features[self.FEATURE_NAMES.index("formant_f3")] = formant_freqs[2]
+            except Exception:
+                pass
+
+            # --- Pathway-specific features (biophysics-informed) ---
+
+            # Alpha ratio: log energy (1-5kHz) / (50-1000Hz) — Pathway B marker
+            try:
+                n_fft = 2048
+                S = np.abs(np.fft.rfft(y[:min(len(y), self.sr)], n=n_fft)) ** 2
+                freqs = np.fft.rfftfreq(n_fft, d=1.0 / self.sr)
+                lo_mask = (freqs >= 50) & (freqs <= 1000)
+                hi_mask = (freqs >= 1000) & (freqs <= 5000)
+                lo_energy = np.sum(S[lo_mask])
+                hi_energy = np.sum(S[hi_mask])
+                if lo_energy > 1e-12:
+                    features[self.FEATURE_NAMES.index("alpha_ratio")] = float(
+                        10 * np.log10(max(hi_energy, 1e-12) / lo_energy)
+                    )
+            except Exception:
+                pass
+
+            # Spectral tilt: linear regression slope of log-magnitude spectrum
+            try:
+                n_fft = 2048
+                mag = np.abs(np.fft.rfft(y[:min(len(y), self.sr)], n=n_fft))
+                freqs = np.fft.rfftfreq(n_fft, d=1.0 / self.sr)
+                pos = freqs > 0
+                log_mag = np.log(mag[pos] + 1e-12)
+                log_freq = np.log(freqs[pos])
+                if len(log_freq) > 2:
+                    coeffs = np.polyfit(log_freq, log_mag, 1)
+                    features[self.FEATURE_NAMES.index("spectral_tilt")] = float(coeffs[0])
+            except Exception:
+                pass
+
+            # F0 percentiles — Pathway A range markers
+            if n_voiced >= 5:
+                features[self.FEATURE_NAMES.index("f0_p10")] = float(np.percentile(f0_voiced, 10))
+                features[self.FEATURE_NAMES.index("f0_p90")] = float(np.percentile(f0_voiced, 90))
+
+            # PTP proxy: min RMS in first 0.5s of phonation — Pathway A readout
+            try:
+                onset_samples = int(self.sr * 0.5)
+                onset = y[:onset_samples]
+                if len(onset) >= 1024:
+                    frame_len = 1024
+                    hop = 256
+                    n_onset_frames = max(1, (len(onset) - frame_len) // hop + 1)
+                    onset_rms = np.array([
+                        np.sqrt(np.mean(onset[i * hop: i * hop + frame_len] ** 2))
+                        for i in range(n_onset_frames)
+                    ])
+                    features[self.FEATURE_NAMES.index("ptp_proxy")] = float(np.min(onset_rms))
             except Exception:
                 pass
 

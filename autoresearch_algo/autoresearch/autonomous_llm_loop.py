@@ -62,12 +62,14 @@ except ImportError:
 
 NORM_METHODS = ["none", "zscore", "rank"]
 N_MFCC_OPTIONS = [8, 13, 20, 30, 40]
-CGM_LAG_OPTIONS_MIN = [-15, -5, 0, 5, 10, 15, 20, 30]
+CGM_LAG_OPTIONS_MIN = [-15, -5, 0, 5, 10, 15, 20, 30, 45]
 ONVOX_PRIOR_MODELS = {"Ridge", "BayesianRidge", "SVR"}
 ONVOX_PRIOR_FEATURES = {
     "mfcc+spectral",
     "mfcc+spectral+pitch",
     "mfcc+spectral+pitch+temporal",
+    "pathway_ab",
+    "deconfounded",
 }
 ONVOX_PRIOR_MFCC = {13, 20}
 DEFAULT_MODEL_PREF = [
@@ -188,6 +190,7 @@ def _flags_from_feature_key(feature_key: str) -> Dict[str, bool]:
         "include_pitch": bool(cfg["include_pitch"]),
         "use_vq": bool(cfg["use_vq"]),
         "use_temporal": bool(cfg["use_temporal"]),
+        "deconfound": bool(cfg.get("deconfound", False)),
     }
 
 
@@ -455,11 +458,11 @@ def _passes_onvox_cycle_policy(
 ) -> bool:
     """Apply ONVOX-informed cycle policy to improve early search efficiency."""
     if cycle <= 4:
-        # Early: emphasize temporal priors and simpler robust models.
+        # Early: emphasize temporal/pathway priors and simpler robust models.
         return (
-            ("temporal" in feature_key)
+            ("temporal" in feature_key or feature_key in {"pathway_ab", "deconfounded"})
             and (model_name in {"Ridge", "BayesianRidge"})
-            and (cgm_lag_min in {5, 10, 15, 20})
+            and (cgm_lag_min in {5, 10, 15, 20, 30, 45})
         )
     if cycle <= 14:
         # Warm-up: keep close to known strong personal model family.
@@ -479,11 +482,16 @@ def _onvox_prior_bonus(
         bonus -= 0.4
     if feature_key in ONVOX_PRIOR_FEATURES:
         bonus -= 0.4
+    # Extra bonus for biophysics-informed pathway combos
+    if feature_key in {"pathway_ab", "deconfounded"}:
+        bonus -= 0.2
     if n_mfcc in ONVOX_PRIOR_MFCC:
         bonus -= 0.2
-    # Diffusion-delay prior: positive lag is more plausible than negative lag.
-    if cgm_lag_min in {5, 10, 15, 20}:
+    # Diffusion-delay prior: osmotic pathway predicts 15-45 min lag.
+    if cgm_lag_min in {15, 20, 30, 45}:
         bonus -= 0.3
+    elif cgm_lag_min in {5, 10}:
+        bonus -= 0.15
     elif cgm_lag_min < 0:
         bonus += 0.1
     return bonus
@@ -622,17 +630,20 @@ Recently evaluated rows:
 Already tried experiment keys (avoid duplicates):
 {tried_preview}
 
-Priors from ONVOX memory:
-- CRITICAL: There is NO population-level voice-glucose signal (r=-0.098).
-  Optimize for PERSONAL model accuracy (pers_mae, pers_r).
-- The scoring formula is: 0.85*pers_mae + 0.15*pop_mae - pers_r_bonus + penalties.
-  Lowering pers_mae and raising pers_r are the primary levers.
-- Early calibration tends to work best with Ridge/BayesianRidge.
-- Temporal context is especially important in very early cycles.
-- Strong practical defaults: n_mfcc in [13, 20] and feature_key in
-  ["mfcc+spectral", "mfcc+spectral+pitch", "mfcc+spectral+pitch+temporal"].
-- Explore CGM lag because interstitial CGM can lag blood; voice might lead CGM.
-- Prefer positive lag hypotheses (e.g., +5 to +20 min), but still test controls.
+Biophysics priors (Apr 2026 literature review):
+- THREE PATHWAYS modulate voice by glucose:
+  A) Osmotic/viscoelastic: glucose -> serum osmolality -> vocal fold dehydration -> F0 rises
+     (+0.02 Hz per mg/dL). LAGS CGM by 15-45 min. Features: f0_mean, f0_p10, f0_p90, ptp_proxy, hnr.
+  B) Autonomic: hypo counter-regulation -> laryngeal tension -> spectral shift.
+     Features: alpha_ratio, spectral_tilt, shimmer. Only active below ~80 mg/dL.
+  C) Neuroglycopenic: below ~70 only. Not in current feature set.
+- CRITICAL: No population signal (r=-0.098). Optimize PERSONAL models only.
+- Hydration is collinear with glucose (both osmolality) — NOT a confounder, part of signal.
+- "deconfounded" feature_key regresses out circadian F0 drift — pure SNR improvement.
+- "pathway_ab" includes alpha_ratio, ptp_proxy, spectral_tilt (Pathway A+B markers).
+- Scoring: 0.85*pers_mae + 0.15*pop_mae - pers_r_bonus + penalties.
+- Diffusion-delay prior: lags 15-30 most plausible for Pathway A. Also test 45.
+- Strong defaults: Ridge/BayesianRidge, n_mfcc 13-20, use_vq=True for pathway features.
 
 Return JSON only with keys:
 {{
@@ -902,6 +913,7 @@ def evaluate_one(
         use_vq=flags["use_vq"],
         use_temporal=flags["use_temporal"],
         normalization=normalization,
+        deconfound=flags.get("deconfound", False),
     )
     if not fdata:
         raise RuntimeError("Feature extraction returned no valid participant data.")
@@ -1056,6 +1068,8 @@ _COMBO_TO_SUBSET = {
     "mfcc+spectral+pitch+vq": "personal_14",
     "mfcc+spectral+pitch+temporal": "personal_10_time",
     "all_features": "full",
+    "pathway_ab": "personal_14",
+    "deconfounded": "full",
 }
 
 
