@@ -272,7 +272,7 @@ def call_ollama_chat(
             {"role": "user", "content": prompt},
         ],
         "stream": False,
-        "options": {"temperature": 0.2, "num_ctx": 4096},
+        "options": {"temperature": 0.5, "num_ctx": 4096},
     }
     if schema is not None:
         payload["format"] = schema
@@ -641,7 +641,7 @@ Biophysics priors (Apr 2026 literature review):
 - Hydration is collinear with glucose (both osmolality) — NOT a confounder, part of signal.
 - "deconfounded" feature_key regresses out circadian F0 drift — pure SNR improvement.
 - "pathway_ab" includes alpha_ratio, ptp_proxy, spectral_tilt (Pathway A+B markers).
-- Scoring: 0.85*pers_mae + 0.15*pop_mae - pers_r_bonus + penalties.
+- Scoring: 0.95*pers_mae + 0.05*pop_mae - pers_r_bonus - temp_r_bonus + overfit_penalty + penalties. Temporal r is king.
 - Diffusion-delay prior: lags 15-30 most plausible for Pathway A. Also test 45.
 - Strong defaults: Ridge/BayesianRidge, n_mfcc 13-20, use_vq=True for pathway features.
 
@@ -937,32 +937,35 @@ def evaluate_one(
     pop_mard = float(pop_res.get("mard", float("nan")))
     pop_clarke_ab_pct = float(pop_res.get("clarke_ab_pct", float("nan")))
     pop_bias = float(pop_res.get("bias", float("nan")))
-    # Personal-focused balance: 85% personal, 15% population (population has no signal)
-    balance = 0.85 * pers_mae + 0.15 * pop_mae
+    # Personal-focused balance: 95% personal, 5% population (population has no signal)
+    balance = 0.95 * pers_mae + 0.05 * pop_mae
 
-    # Reward personal correlation (bonus = subtract from score, lower is better)
-    pers_r_bonus = max(0.0, pers_r - 0.1) * 3.0
+    # Reward personal correlation strongly — makes r improvements worth ~equivalent MAE reduction
+    pers_r_bonus = max(0.0, pers_r - 0.1) * 8.0
 
-    # ONVOX signal gate: r>0.3 AND improvement>10% AND p<0.05 (per participant).
+    # ONVOX signal gate (softened): r>0.2 AND improvement>5% AND p<0.10 (per participant).
+    # Softer thresholds create a gradient the optimizer can climb with sparse per-user data.
     gate_total = 0
     gate_pass = 0
     for v in p_res.values():
         gate_total += 1
         if (
-            float(v.get("r", 0.0)) > 0.3
-            and float(v.get("pct_improvement", 0.0)) > 10.0
-            and float(v.get("p_value", 1.0)) < 0.05
+            float(v.get("r", 0.0)) > 0.2
+            and float(v.get("pct_improvement", 0.0)) > 5.0
+            and float(v.get("p_value", 1.0)) < 0.10
         ):
             gate_pass += 1
     signal_gate_pass_rate = (gate_pass / gate_total) if gate_total else 0.0
-    # Penalize low signal evidence; no penalty once >=30% participants pass gate.
-    signal_gate_penalty = max(0.0, 0.30 - signal_gate_pass_rate) * 3.0
+    # Penalize low signal evidence; no penalty once >=20% participants pass gate.
+    signal_gate_penalty = max(0.0, 0.20 - signal_gate_pass_rate) * 2.0
 
     # Safe early-stop pruning:
     # Use an optimistic lower bound (no temporal penalties) to decide whether
     # this candidate can no longer beat the current keep threshold.
-    # Optimistic: assume best-case pers_r_bonus and no temporal/temp_r penalties.
-    optimistic_lower_bound = balance - pers_r_bonus + signal_gate_penalty
+    # Optimistic: assume best-case pers_r_bonus, best-case temp_r_bonus
+    # (temp_r matches pers_r), no overfit penalty, no temporal MAE penalty.
+    optimistic_temp_r_bonus = max(0.0, pers_r - 0.05) * 12.0
+    optimistic_lower_bound = balance - pers_r_bonus - optimistic_temp_r_bonus + signal_gate_penalty
     should_early_stop = (
         include_temporal
         and early_stop_cutoff is not None
@@ -975,8 +978,8 @@ def evaluate_one(
         temp_mard = float("nan")
         temp_bias = float("nan")
         temporal_penalty = 0.0
-        temp_r_penalty = 0.0
-        correlation_penalty = temp_r_penalty + signal_gate_penalty
+        # Early stop: use optimistic temp_r_bonus, no overfit penalty
+        correlation_penalty = -optimistic_temp_r_bonus + signal_gate_penalty
         selection_score = optimistic_lower_bound
         notes = "early_stop_no_temporal"
         return EvalResult(
@@ -1014,20 +1017,29 @@ def evaluate_one(
     temp_bias = mean([float(v.get("bias", 0.0)) for v in t_res.values()]) if t_res else float("nan")
 
     # Personal-focused selection score:
-    # - balance is 85% personal MAE + 15% population MAE
+    # - balance is 95% personal MAE + 5% population MAE
     # - reward personal correlation (pers_r_bonus subtracted)
+    # - reward temporal correlation strongly (temp_r_bonus subtracted) — this is THE signal
+    # - penalize overfitting (pers_r >> temp_r gap)
     # - penalize temporal leakage (temp_mae worse than pers_mae)
-    # - penalize weak temporal correlation
     # - penalize low signal gate pass rate
     temporal_penalty = (
         max(0.0, temp_mae - pers_mae) if (include_temporal and math.isfinite(temp_mae)) else 0.0
     )
-    temp_r_penalty = (
-        max(0.0, 0.05 - temp_r) * 2.0
+    # Temporal r bonus: strongest reward — proves forward generalization, not overfitting
+    temp_r_bonus = (
+        max(0.0, temp_r - 0.05) * 12.0
         if (include_temporal and math.isfinite(temp_r))
         else 0.0
     )
-    correlation_penalty = temp_r_penalty + signal_gate_penalty
+    # Overfitting detector: penalize when CV correlation doesn't hold forward in time
+    # Allow 0.15 gap (expected temporal degradation), then penalize hard
+    overfit_penalty = (
+        max(0.0, pers_r - temp_r - 0.15) * 6.0
+        if (include_temporal and math.isfinite(temp_r))
+        else 0.0
+    )
+    correlation_penalty = -temp_r_bonus + overfit_penalty + signal_gate_penalty
     selection_score = balance - pers_r_bonus + temporal_penalty + correlation_penalty
 
     return EvalResult(
@@ -1569,7 +1581,7 @@ def main() -> None:
     parser.add_argument(
         "--min-improvement",
         type=float,
-        default=0.03,
+        default=0.01,
         help="Required balance improvement to mark as keep.",
     )
     parser.add_argument(
