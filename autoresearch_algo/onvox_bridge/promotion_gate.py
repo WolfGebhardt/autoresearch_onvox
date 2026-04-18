@@ -51,6 +51,7 @@ MODEL_MAP = {
     "GradientBoosting": "GradientBoosting",
     "ExtraTrees": "ExtraTrees",
     "KNN": "KNN",
+    "GP": "PhysicsGP",
 }
 
 # Feature combo -> closest BT feature subset

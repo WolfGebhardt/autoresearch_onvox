@@ -52,6 +52,13 @@ try:
 except ImportError:
     HAS_PRODUCTION_LOADER = False
 
+# Supabase syncer (optional — re-syncs production data periodically)
+try:
+    from onvox_bridge.supabase_syncer import sync_calibrations as _sync_calibrations
+    HAS_SUPABASE_SYNCER = True
+except ImportError:
+    HAS_SUPABASE_SYNCER = False
+
 # Promotion gate (optional — queues passing configs)
 try:
     from onvox_bridge.promotion_gate import check_and_queue_result
@@ -59,11 +66,13 @@ try:
 except ImportError:
     HAS_PROMOTION_GATE = False
 
+# How often (in cycles) to re-sync production data from Supabase
+RESYNC_EVERY_N_CYCLES = 10
 
 NORM_METHODS = ["none", "zscore", "rank"]
 N_MFCC_OPTIONS = [8, 13, 20, 30, 40]
 CGM_LAG_OPTIONS_MIN = [-15, -5, 0, 5, 10, 15, 20, 30, 45]
-ONVOX_PRIOR_MODELS = {"Ridge", "BayesianRidge", "SVR"}
+ONVOX_PRIOR_MODELS = {"Ridge", "BayesianRidge", "SVR", "GP"}
 ONVOX_PRIOR_FEATURES = {
     "mfcc+spectral",
     "mfcc+spectral+pitch",
@@ -374,7 +383,7 @@ def _model_family(model_name: str) -> str:
         return "linear"
     if m in {"RandomForest", "ExtraTrees"}:
         return "tree"
-    if m in {"SVR"}:
+    if m in {"SVR", "GP"}:
         return "kernel"
     if m in {"Huber"}:
         return "robust"
@@ -458,16 +467,16 @@ def _passes_onvox_cycle_policy(
 ) -> bool:
     """Apply ONVOX-informed cycle policy to improve early search efficiency."""
     if cycle <= 4:
-        # Early: emphasize temporal/pathway priors and simpler robust models.
+        # Early: emphasize temporal/pathway priors and robust models + GP (best production model).
         return (
             ("temporal" in feature_key or feature_key in {"pathway_ab", "deconfounded"})
-            and (model_name in {"Ridge", "BayesianRidge"})
+            and (model_name in {"Ridge", "BayesianRidge", "GP"})
             and (cgm_lag_min in {5, 10, 15, 20, 30, 45})
         )
     if cycle <= 14:
         # Warm-up: keep close to known strong personal model family.
         return (
-            model_name in {"Ridge", "BayesianRidge"}
+            model_name in {"Ridge", "BayesianRidge", "GP"}
             and n_mfcc in ONVOX_PRIOR_MFCC
             and feature_key in ONVOX_PRIOR_FEATURES
         )
@@ -480,6 +489,9 @@ def _onvox_prior_bonus(
     bonus = 0.0
     if model_name in ONVOX_PRIOR_MODELS:
         bonus -= 0.4
+    # Extra bonus for GP — best production model (a0456651: r=0.779, ARD learns per-user relevance)
+    if model_name == "GP":
+        bonus -= 0.3
     if feature_key in ONVOX_PRIOR_FEATURES:
         bonus -= 0.4
     # Extra bonus for biophysics-informed pathway combos
@@ -644,6 +656,9 @@ Biophysics priors (Apr 2026 literature review):
 - Scoring: 0.95*pers_mae + 0.05*pop_mae - pers_r_bonus - temp_r_bonus + overfit_penalty + penalties. Temporal r is king.
 - Diffusion-delay prior: lags 15-30 most plausible for Pathway A. Also test 45.
 - Strong defaults: Ridge/BayesianRidge, n_mfcc 13-20, use_vq=True for pathway features.
+- GP (GaussianProcessRegressor) with ARD kernel: BEST production model (a0456651: r=0.779, MAE 7.15).
+  ARD learns per-user feature relevance automatically. Try GP with pathway_ab, mfcc+spectral+pitch, deconfounded.
+  GP is O(n^3) — subsamples to 200 max. Needs >= 10 samples per user.
 
 Return JSON only with keys:
 {{
@@ -1564,6 +1579,39 @@ def write_json(path: Path, payload: Dict) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def _maybe_resync_production_data(
+    cycle: int,
+    last_sync_cycle: int,
+) -> Tuple[Optional[Dict], int]:
+    """Re-sync production data from Supabase every RESYNC_EVERY_N_CYCLES cycles.
+
+    Returns (new_production_data_or_None, updated_last_sync_cycle).
+    If sync is not due or fails, returns (None, last_sync_cycle).
+    """
+    if not HAS_SUPABASE_SYNCER or not HAS_PRODUCTION_LOADER:
+        return None, last_sync_cycle
+    if cycle - last_sync_cycle < RESYNC_EVERY_N_CYCLES:
+        return None, last_sync_cycle
+
+    print(f"[cycle {cycle}] Re-syncing production data from Supabase...")
+    try:
+        sync_result = _sync_calibrations(min_samples=5)
+        total_synced = sum(r.get("n_samples", 0) for r in sync_result.values())
+        print(f"[cycle {cycle}] Synced {len(sync_result)} users, {total_synced} samples")
+
+        production_data = load_production_data()
+        if production_data:
+            total_prod = sum(d["glucose"].shape[0] for d in production_data.values())
+            print(f"[cycle {cycle}] Reloaded production data: {len(production_data)} users, {total_prod} samples")
+            return production_data, cycle
+        else:
+            print(f"[cycle {cycle}] Sync succeeded but no production data loaded")
+            return None, cycle
+    except Exception as e:
+        print(f"[cycle {cycle}] Re-sync failed (will retry in {RESYNC_EVERY_N_CYCLES} cycles): {e}")
+        return None, cycle
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Autonomous local-LLM loop for ONVOX AutoResearch.")
     parser.add_argument("--config", default=None, help="Path to ONVOX config.yaml")
@@ -1804,6 +1852,8 @@ def main() -> None:
         except Exception:
             pass
 
+    last_sync_cycle = 0  # Track when we last re-synced production data
+
     try:
         if args.optimizer_mode == "classic":
             while True:
@@ -1811,6 +1861,11 @@ def main() -> None:
                 if args.max_cycles > 0 and cycle > args.max_cycles:
                     print("[done] Reached max cycles.")
                     break
+
+                # Periodically re-sync production data from Supabase
+                new_prod, last_sync_cycle = _maybe_resync_production_data(cycle, last_sync_cycle)
+                if new_prod is not None:
+                    production_data = new_prod
 
                 print(f"\n[cycle {cycle}] Proposing next experiment...")
                 write_runtime_status("proposing", cycle)
@@ -1919,6 +1974,15 @@ def main() -> None:
                 f"stage1=heuristic cache_entries={len(cache)}"
             )
             while True:
+                # Periodically re-sync production data from Supabase
+                new_prod, last_sync_cycle = _maybe_resync_production_data(cycle, last_sync_cycle)
+                if new_prod is not None:
+                    production_data = new_prod
+                    # Invalidate eval cache — results are stale with new data
+                    cache.clear()
+                    save_cache(cache_path, cache)
+                    print(f"[cycle {cycle}] Eval cache cleared after data re-sync")
+
                 if args.max_cycles > 0 and cycle >= args.max_cycles:
                     print("[done] Reached max cycles.")
                     break

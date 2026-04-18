@@ -20,6 +20,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from scipy import stats
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import (
+    RBF, WhiteKernel, ConstantKernel as C,
+)
 from sklearn.linear_model import (
     BayesianRidge,
     Ridge,
@@ -61,6 +65,64 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Model Registry
 # =============================================================================
+
+class _SubsamplingGP(GaussianProcessRegressor):
+    """GP wrapper that subsamples training data when n > MAX to keep O(n^3) feasible.
+
+    Also rebuilds the kernel with per-feature ARD length scales at fit time,
+    since the feature count isn't known until .fit() is called.
+    """
+
+    MAX_TRAINING_SAMPLES = 200
+    MIN_TRAINING_SAMPLES = 10
+
+    def fit(self, X, y, **kwargs):
+        n, p = X.shape
+        if n < self.MIN_TRAINING_SAMPLES:
+            raise ValueError(f"GP needs >= {self.MIN_TRAINING_SAMPLES} samples, got {n}")
+        if n > self.MAX_TRAINING_SAMPLES:
+            rng = np.random.RandomState(42)
+            idx = rng.choice(n, self.MAX_TRAINING_SAMPLES, replace=False)
+            idx.sort()
+            X, y = X[idx], y[idx]
+
+        # Rebuild kernel with ARD length scales matching actual feature count
+        length_scales = np.ones(p) * 2.5
+        # Physics priors for pitch features (indices 0,1,6,7 in personal_10)
+        if p >= 8:
+            for i in [0, 1, 6, 7]:
+                if i < p:
+                    length_scales[i] = 1.5
+        self.kernel = (
+            C(1.0, (0.1, 10.0))
+            * RBF(length_scale=length_scales, length_scale_bounds=(0.1, 10.0))
+            + WhiteKernel(noise_level=1.0, noise_level_bounds=(0.01, 100.0))
+        )
+        return super().fit(X, y, **kwargs)
+
+
+def _build_gp_regressor(params: Optional[Dict] = None) -> _SubsamplingGP:
+    """Build a GP with physics-informed ARD kernel (mirrors production PhysicsInformedGP).
+
+    Uses per-feature length scales so ARD can learn which features matter
+    for each user — this is what makes GP powerful for personal models.
+    Subsamples to 200 samples max to keep O(n^3) feasible.
+    """
+    params = params or {}
+    # Initial kernel placeholder — rebuilt at fit() with correct n_features
+    kernel = (
+        C(1.0, (0.1, 10.0))
+        * RBF(length_scale=2.0, length_scale_bounds=(0.1, 10.0))
+        + WhiteKernel(noise_level=1.0, noise_level_bounds=(0.01, 100.0))
+    )
+    return _SubsamplingGP(
+        kernel=kernel,
+        alpha=params.get("alpha", 1e-3),
+        normalize_y=params.get("normalize_y", True),
+        n_restarts_optimizer=params.get("n_restarts", 3),
+        random_state=42,
+    )
+
 
 def get_model(name: str, params: Optional[Dict] = None):
     """
@@ -111,6 +173,7 @@ def get_model(name: str, params: Optional[Dict] = None):
             max_depth=params.get("max_depth", None),
             random_state=params.get("random_state", 42),
         ),
+        "GP": lambda: _build_gp_regressor(params),
     }
 
     if name not in registry:

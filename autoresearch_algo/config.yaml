@@ -273,3 +273,20 @@ participants:
     glucose_unit: "mmol/L"
     optimal_offset: 0
     notes: "Christian Legler = Number 8 (from key). May not have audio."
+
+  Tamara:
+    glucose_csv: []
+    audio_dirs:
+      - "Tamara/audio"
+    audio_ext: [".opus"]
+    glucose_unit: "mg/dL"
+    optimal_offset: 0
+    notes: "3adf8783/Tamara. Glucose from filename. Pre-matched CSV used."
+
+  Child_103:
+    glucose_csv: []
+    audio_dirs: []
+    audio_ext: [".m4a"]
+    glucose_unit: "mg/dL"
+    optimal_offset: 0
+    notes: "7-year-old. 23 recordings, no real timestamps (synthetic). Pre-matched CSV used."

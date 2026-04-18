@@ -99,6 +99,7 @@ MODEL_NAMES = [
     "GradientBoosting",
     "ExtraTrees",
     "KNN",
+    "GP",
 ]
 
 # Quick mode: reduced search
@@ -146,8 +147,6 @@ def load_all_audio(cfg, participants_filter=None) -> Dict[str, Dict]:
 
     data = {}
     for name, pcfg in participants.items():
-        if not pcfg.get("glucose_csv"):
-            continue
         df = load_participant_data(name, pcfg, base_dir, matching_cfg)
         if df.empty or len(df) < 20:
             logger.info("  %s: Skipped (%d samples)", name, len(df))
